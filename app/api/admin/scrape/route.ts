@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+export async function GET() {
+  return NextResponse.json({ message: 'Scrape API endpoint is working' });
+}
+
 // Inline Idealista API functions
 async function getIdealistaToken() {
   const credentials = Buffer.from(`${process.env.IDEALISTA_API_KEY}:${process.env.IDEALISTA_SECRET}`).toString('base64');
@@ -40,6 +44,7 @@ async function searchPropertiesInCity(city: string, propertyType: string, operat
     throw new Error(`Coordinates not found for city: ${city}`);
   }
 
+  // Correct Idealista API endpoint structure - POST with form data
   const params = new URLSearchParams({
     operation,
     propertyType,
@@ -50,25 +55,37 @@ async function searchPropertiesInCity(city: string, propertyType: string, operat
     numPage: page.toString()
   });
 
-  const url = `https://api.idealista.com/3.5/es/search?${params}`;
+  const url = `https://api.idealista.com/3.5/es/search`;
+  console.log('Idealista API URL:', url);
+  console.log('Idealista API params:', params.toString());
   
   const response = await fetch(url, {
+    method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    }
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: params.toString()
   });
 
+  console.log('Idealista API response status:', response.status);
+  
   if (!response.ok) {
-    throw new Error(`Search request failed: ${response.status}`);
+    const errorText = await response.text();
+    console.error('Idealista API error:', errorText);
+    throw new Error(`Search request failed: ${response.status} - ${errorText}`);
   }
 
-  return await response.json();
+  const result = await response.json();
+  console.log('Idealista API result:', result);
+  return result;
 }
 
 export async function POST(request: NextRequest) {
+  console.log('POST /api/admin/scrape called');
   try {
     const body = await request.json();
+    console.log('Request body:', body);
     const { city, propertyType = 'homes', operation = 'sale', maxRequests = 5 } = body;
 
     if (!city) {
@@ -116,10 +133,10 @@ export async function POST(request: NextRequest) {
     let allProperties = [];
     let currentPage = 1;
 
-    // Initialize Supabase client
+    // Initialize Supabase client with service role for database operations
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
     while (currentPage <= maxRequests) {

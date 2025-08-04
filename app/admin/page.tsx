@@ -84,7 +84,7 @@ export default function AdminPage() {
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
-      [name]: name === 'maxRequests' ? parseInt(value) : value
+      [name]: name === 'maxRequests' ? (value ? parseInt(value) || 1 : 1) : value
     }));
   };
 
@@ -161,7 +161,7 @@ export default function AdminPage() {
                       className={`h-2.5 rounded-full ${
                         apiUsage.remaining < 10 ? 'bg-red-600' : 'bg-blue-600'
                       }`}
-                      style={{ width: `${(apiUsage.used / apiUsage.total) * 100}%` }}
+                      style={{ width: `${Math.min(100, Math.max(0, (apiUsage.used / apiUsage.total) * 100))}%` }}
                     ></div>
                   </div>
                   
