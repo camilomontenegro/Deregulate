@@ -122,6 +122,8 @@ export async function POST(request: NextRequest) {
       propertyType,
       operation,
       startTime: new Date().toISOString(),
+      endTime: '', // Will be set after scraping
+      duration: 0, // Will be set after scraping
       requestsUsed: 0,
       propertiesFound: 0,
       propertiesStored: 0,
@@ -130,7 +132,7 @@ export async function POST(request: NextRequest) {
       errors: [] as any[]
     };
 
-    let allProperties = [];
+    let allProperties: any[] = [];
     let currentPage = 1;
 
     // Initialize Supabase client with service role for database operations

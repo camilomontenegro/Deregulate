@@ -3,6 +3,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader } from '@googlemaps/js-api-loader';
 import { createClient } from '@supabase/supabase-js';
+import LayerControlPanel from './LayerControlPanel';
+/// <reference types="@types/google.maps" />
+
+// Singleton loader to prevent multiple API calls
+let mapLoader: Loader | null = null;
+let isLoaderInitialized = false;
+
+const getMapLoader = (apiKey: string) => {
+  if (!mapLoader && !isLoaderInitialized) {
+    isLoaderInitialized = true;
+    mapLoader = new Loader({
+      apiKey: apiKey,
+      version: 'weekly',
+      libraries: ['maps', 'marker', 'visualization']
+    });
+  }
+  return mapLoader;
+};
 
 const majorCities = [
   { name: 'Madrid', lat: 40.4168, lng: -3.7038 },
@@ -30,8 +48,11 @@ interface Property {
 
 const Map = () => {
   const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<google.maps.Map | null>(null);
+  const heatmapRef = useRef<any>(null);
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
+  const [heatmapEnabled, setHeatmapEnabled] = useState(false);
 
   // Fetch properties from Supabase
   useEffect(() => {
@@ -68,21 +89,22 @@ const Map = () => {
     const initializeMap = async () => {
       const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
       
-      if (!apiKey) return;
+      if (!apiKey || !mapRef.current) return;
 
-      const loader = new Loader({
-        apiKey: apiKey,
-        version: 'weekly',
-        libraries: ['maps', 'marker']
-      });
+      try {
+        const loader = getMapLoader(apiKey);
+        if (!loader) return;
 
-      const [{ Map }, { AdvancedMarkerElement }, { PinElement }] = await Promise.all([
-        loader.importLibrary('maps'),
-        loader.importLibrary('marker'),
-        loader.importLibrary('marker')
-      ]);
+        const [{ Map }, { AdvancedMarkerElement }, { PinElement }] = await Promise.all([
+          loader.importLibrary('maps'),
+          loader.importLibrary('marker'),
+          loader.importLibrary('marker')
+        ]);
 
-      if (mapRef.current) {
+        const { HeatmapLayer } = await loader.importLibrary('visualization');
+
+        // Double-check mapRef is still valid after async operations
+        if (!mapRef.current) return;
         const map = new Map(mapRef.current, {
           center: { lat: 40.4168, lng: -3.7038 },
           zoom: 6,
@@ -166,6 +188,71 @@ const Map = () => {
           gestureHandling: 'cooperative'
         });
 
+        // Store map instance for heatmap updates
+        mapInstanceRef.current = map;
+
+        // Calculate price statistics from existing Supabase data for proper comparison
+        const validProperties = properties.filter(property => 
+          property.latitude && property.longitude && property.price > 0
+        );
+        
+        if (validProperties.length === 0) return;
+        
+        const prices = validProperties.map(property => property.price);
+        const avgPrice = prices.reduce((sum, price) => sum + price, 0) / prices.length;
+        const minPrice = Math.min(...prices);
+        const maxPrice = Math.max(...prices);
+        
+        console.log(`Price stats - Min: €${minPrice}, Avg: €${avgPrice.toFixed(0)}, Max: €${maxPrice}`);
+
+        // Create heatmap data points based on price comparison to average
+        const heatmapData = validProperties.map(property => {
+          // Calculate how much above/below average this property is
+          const priceRatio = property.price / avgPrice;
+          
+          // Create weight based on price relative to average
+          let weight;
+          if (priceRatio >= 2.0) {
+            weight = 10; // Very expensive (2x+ average) = hot red
+          } else if (priceRatio >= 1.5) {
+            weight = 7; // Expensive (1.5x+ average) = orange
+          } else if (priceRatio >= 1.2) {
+            weight = 5; // Above average (1.2x+ average) = yellow
+          } else if (priceRatio >= 0.8) {
+            weight = 3; // Around average (0.8-1.2x average) = green
+          } else if (priceRatio >= 0.5) {
+            weight = 1; // Below average (0.5-0.8x average) = cyan
+          } else {
+            weight = 0.1; // Very cheap (<0.5x average) = blue/transparent
+          }
+          
+          return {
+            location: new google.maps.LatLng(property.latitude, property.longitude),
+            weight: weight
+          };
+        });
+
+        // Create heatmap layer with settings optimized for continuous gradients
+        const heatmap = new HeatmapLayer({
+          data: heatmapData,
+          map: null, // Initially not shown
+          radius: 50, // Increased radius for better blending
+          opacity: 0.8, // Higher opacity for more visible gradients
+          maxIntensity: 5, // Control maximum intensity to prevent oversaturation
+          dissipating: true, // Enable dissipation for smoother gradients
+          gradient: [
+            'rgba(0, 0, 255, 0)', // Transparent blue (no data)
+            'rgba(0, 0, 255, 0.2)', // Light blue (low density)
+            'rgba(0, 255, 255, 0.4)', // Cyan (low-medium density)
+            'rgba(0, 255, 0, 0.6)', // Green (medium density)
+            'rgba(255, 255, 0, 0.8)', // Yellow (medium-high density)
+            'rgba(255, 165, 0, 0.9)', // Orange (high density)
+            'rgba(255, 0, 0, 1)' // Red (highest density)
+          ]
+        });
+
+        heatmapRef.current = heatmap;
+
         // Add city markers
         majorCities.forEach(city => {
           const cityPin = new PinElement({
@@ -235,16 +322,78 @@ const Map = () => {
             });
           }
         });
+
+      } catch (error) {
+        console.error('Error initializing map:', error);
       }
     };
 
-    if (!loading && properties.length > 0) {
+    // Only initialize once when we have properties and loading is complete
+    if (!loading && properties.length > 0 && !mapInstanceRef.current) {
       initializeMap();
     }
   }, [properties, loading]);
 
+  // Handle heatmap toggle
+  useEffect(() => {
+    if (heatmapRef.current && mapInstanceRef.current) {
+      if (heatmapEnabled) {
+        heatmapRef.current.setMap(mapInstanceRef.current);
+      } else {
+        heatmapRef.current.setMap(null);
+      }
+    }
+  }, [heatmapEnabled]);
+
+  // Update heatmap data when properties change - using existing Supabase data only
+  useEffect(() => {
+    if (heatmapRef.current && properties.length > 0) {
+      const validProperties = properties.filter(property => 
+        property.latitude && property.longitude && property.price > 0
+      );
+      
+      if (validProperties.length === 0) return;
+
+      // Recalculate average price from current data
+      const prices = validProperties.map(property => property.price);
+      const avgPrice = prices.reduce((sum, price) => sum + price, 0) / prices.length;
+
+      const heatmapData = validProperties.map(property => {
+        const priceRatio = property.price / avgPrice;
+        
+        // Same weight logic as initialization for consistency
+        let weight;
+        if (priceRatio >= 2.0) {
+          weight = 10; // Very expensive = hot red
+        } else if (priceRatio >= 1.5) {
+          weight = 7; // Expensive = orange
+        } else if (priceRatio >= 1.2) {
+          weight = 5; // Above average = yellow
+        } else if (priceRatio >= 0.8) {
+          weight = 3; // Around average = green
+        } else if (priceRatio >= 0.5) {
+          weight = 1; // Below average = cyan
+        } else {
+          weight = 0.1; // Very cheap = blue/transparent
+        }
+        
+        return {
+          location: new google.maps.LatLng(property.latitude, property.longitude),
+          weight: weight
+        };
+      });
+
+      heatmapRef.current.setData(heatmapData);
+    }
+  }, [properties]);
+
+  const handleHeatmapToggle = (enabled: boolean) => {
+    setHeatmapEnabled(enabled);
+  };
+
   return (
     <div className="relative">
+      {/* Loading Indicator */}
       {loading && (
         <div className="absolute top-4 left-4 bg-white px-3 py-2 rounded-lg shadow-lg z-10">
           <div className="flex items-center gap-2">
@@ -254,7 +403,8 @@ const Map = () => {
         </div>
       )}
       
-      {!loading && properties.length > 0 && (
+      {/* Property Legend */}
+      {!loading && properties.length > 0 && !heatmapEnabled && (
         <div className="absolute top-4 left-4 bg-white px-3 py-2 rounded-lg shadow-lg z-10">
           <div className="flex items-center gap-2 text-sm">
             <div className="flex items-center gap-1">
@@ -270,6 +420,15 @@ const Map = () => {
         </div>
       )}
 
+      {/* Layer Control Panel */}
+      <LayerControlPanel
+        heatmapEnabled={heatmapEnabled}
+        onHeatmapToggle={handleHeatmapToggle}
+        propertyCount={properties.length}
+      />
+
+
+      {/* Map Container */}
       <div 
         ref={mapRef} 
         style={{ 
