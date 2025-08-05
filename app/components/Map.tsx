@@ -16,7 +16,10 @@ const getMapLoader = (apiKey: string) => {
     mapLoader = new Loader({
       apiKey: apiKey,
       version: 'weekly',
-      libraries: ['maps', 'marker', 'visualization']
+      libraries: ['maps', 'marker', 'visualization'],
+      // Reduce data loading
+      region: 'ES',
+      language: 'es'
     });
   }
   return mapLoader;
@@ -95,10 +98,8 @@ const Map = () => {
         const loader = getMapLoader(apiKey);
         if (!loader) return;
 
-        const [{ Map }, { AdvancedMarkerElement }, { PinElement }] = await Promise.all([
-          loader.importLibrary('maps'),
-          loader.importLibrary('marker'),
-          loader.importLibrary('marker')
+        const [{ Map }] = await Promise.all([
+          loader.importLibrary('maps')
         ]);
 
         const { HeatmapLayer } = await loader.importLibrary('visualization');
@@ -116,76 +117,51 @@ const Map = () => {
               east: 4.5,
             },
           },
-          mapId: 'DEMO_MAP_ID',
+          mapTypeId: 'roadmap',
+          disableDefaultUI: true,
+          zoomControl: true,
+          gestureHandling: 'cooperative',
+          // Disable features that load additional data
+          clickableIcons: false,
+          keyboardShortcuts: false,
+          // Disable POI and transit
+          disableDoubleClickZoom: false,
+          scrollwheel: true
+        });
+
+        // Apply styles after map creation to override defaults
+        map.setOptions({
           styles: [
+            // Hide ALL POI labels
             {
               featureType: 'poi',
               elementType: 'labels',
               stylers: [{ visibility: 'off' }]
             },
+            // Hide ALL POI icons
             {
-              featureType: 'poi.business',
+              featureType: 'poi',
+              elementType: 'labels.icon',
               stylers: [{ visibility: 'off' }]
             },
+            // Hide transit completely
             {
-              featureType: 'administrative.locality',
-              elementType: 'labels',
+              featureType: 'transit',
               stylers: [{ visibility: 'off' }]
             },
-            {
-              featureType: 'administrative.neighborhood',
-              elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
-            },
+            // Hide road labels but keep roads
             {
               featureType: 'road',
               elementType: 'labels',
               stylers: [{ visibility: 'off' }]
             },
+            // Keep only administrative labels (cities, towns)
             {
-              featureType: 'road.highway',
+              featureType: 'administrative',
               elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
-            },
-            {
-              featureType: 'road.arterial',
-              elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
-            },
-            {
-              featureType: 'road.local',
-              elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
-            },
-            {
-              featureType: 'transit',
-              elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
-            },
-            {
-              featureType: 'transit.station',
-              elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
-            },
-            {
-              featureType: 'transit.station.airport',
-              elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
-            },
-            {
-              featureType: 'transit.station.bus',
-              elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
-            },
-            {
-              featureType: 'transit.station.rail',
-              elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
+              stylers: [{ visibility: 'on' }]
             }
-          ],
-          disableDefaultUI: true,
-          zoomControl: true,
-          gestureHandling: 'cooperative'
+          ]
         });
 
         // Store map instance for heatmap updates
@@ -253,41 +229,41 @@ const Map = () => {
 
         heatmapRef.current = heatmap;
 
-        // Add city markers
+        // Add city markers using regular markers
         majorCities.forEach(city => {
-          const cityPin = new PinElement({
-            background: '#1f2937',
-            borderColor: '#ffffff',
-            glyphColor: '#ffffff',
-            scale: 1.2
-          });
-
-          new AdvancedMarkerElement({
+          new google.maps.Marker({
             map,
             position: { lat: city.lat, lng: city.lng },
             title: city.name,
-            content: cityPin.element
+            icon: {
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 8,
+              fillColor: '#1f2937',
+              fillOpacity: 1,
+              strokeColor: '#ffffff',
+              strokeWeight: 2
+            }
           });
         });
 
-        // Add property markers
+        // Add property markers using regular markers
         properties.forEach(property => {
           if (property.latitude && property.longitude) {
             // Different colors for sale vs rent
             const pinColor = property.operation === 'sale' ? '#ef4444' : '#10b981';
             
-            const propertyPin = new PinElement({
-              background: pinColor,
-              borderColor: '#ffffff',
-              glyphColor: '#ffffff',
-              scale: 0.8
-            });
-
-            const marker = new AdvancedMarkerElement({
+            const marker = new google.maps.Marker({
               map,
               position: { lat: property.latitude, lng: property.longitude },
               title: `${property.address} - €${property.price.toLocaleString()}`,
-              content: propertyPin.element
+              icon: {
+                path: google.maps.SymbolPath.CIRCLE,
+                scale: 6,
+                fillColor: pinColor,
+                fillOpacity: 1,
+                strokeColor: '#ffffff',
+                strokeWeight: 1
+              }
             });
 
             // Create info window content
