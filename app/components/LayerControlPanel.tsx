@@ -6,10 +6,12 @@ import ToggleSwitch from './ToggleSwitch';
 interface LayerControlPanelProps {
   heatmapEnabled: boolean;
   onHeatmapToggle: (enabled: boolean) => void;
+  markersEnabled: boolean;
+  onMarkersToggle: (enabled: boolean) => void;
   propertyCount: number;
 }
 
-const LayerControlPanel = ({ heatmapEnabled, onHeatmapToggle, propertyCount }: LayerControlPanelProps) => {
+const LayerControlPanel = ({ heatmapEnabled, onHeatmapToggle, markersEnabled, onMarkersToggle, propertyCount }: LayerControlPanelProps) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (
@@ -57,18 +59,20 @@ const LayerControlPanel = ({ heatmapEnabled, onHeatmapToggle, propertyCount }: L
             <div className="space-y-3">
               <div className="border-t border-gray-200 pt-3">
                 <ToggleSwitch
+                  enabled={markersEnabled}
+                  onChange={onMarkersToggle}
+                  label="Property Markers"
+                  description="Show individual property markers with clustering"
+                />
+              </div>
+
+              <div className="border-t border-gray-200 pt-3">
+                <ToggleSwitch
                   enabled={heatmapEnabled}
                   onChange={onHeatmapToggle}
                   label="Property Heatmap"
                   description="Show property density with Gaussian blur"
                 />
-              </div>
-
-              {/* Future layers can be added here */}
-              <div className="border-t border-gray-200 pt-3">
-                <div className="text-xs text-gray-400 text-center py-2">
-                  More layers coming soon...
-                </div>
               </div>
             </div>
 

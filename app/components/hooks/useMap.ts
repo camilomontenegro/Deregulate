@@ -1,4 +1,5 @@
 import { Loader } from "@googlemaps/js-api-loader";
+import { MarkerClusterer } from "@googlemaps/markerclusterer";
 import { createClient } from "@supabase/supabase-js";
 import { useEffect, useRef, useState } from "react";
 
@@ -49,6 +50,8 @@ const getMapLoader = (apiKey: string) => {
 export const useMap = () => {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
+  const clustererRef = useRef<MarkerClusterer | null>(null);
+  const markersRef = useRef<google.maps.Marker[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [isClient, setIsClient] = useState(false);
@@ -213,14 +216,15 @@ export const useMap = () => {
           });
         });
 
-        // Add property markers using regular markers
+        // Create property markers but don't add them to map initially
+        const allMarkers: google.maps.Marker[] = [];
         properties.forEach(property => {
           if (property.latitude && property.longitude) {
             // Different colors for sale vs rent
             const pinColor = property.operation === 'sale' ? '#ef4444' : '#10b981';
             
             const marker = new google.maps.Marker({
-              map,
+              map: null, // Initially not on map
               position: { lat: property.latitude, lng: property.longitude },
               title: `${property.address} - €${property.price.toLocaleString()}`,
               icon: {
@@ -263,7 +267,35 @@ export const useMap = () => {
             marker.addListener('click', () => {
               infoWindow.open(map, marker);
             });
+
+            allMarkers.push(marker);
           }
+        });
+
+        // Store markers in ref for toggling
+        markersRef.current = allMarkers;
+
+        // Initialize marker clusterer but don't show markers initially
+        clustererRef.current = new MarkerClusterer({
+          map: null, // Initially not on map
+          markers: allMarkers,
+          gridSize: 60,
+          maxZoom: 15,
+          minimumClusterSize: 2,
+          styles: [
+            {
+              textColor: 'white',
+              textSize: 12,
+              height: 40,
+              width: 40,
+              backgroundPosition: 'center',
+              iconAnchor: [20, 20],
+              textAlign: 'center',
+              fontFamily: 'Arial, sans-serif',
+              fontWeight: 'bold',
+              backgroundSize: 'contain'
+            }
+          ]
         });
 
       } catch (error) {
@@ -307,6 +339,17 @@ export const useMap = () => {
   
       fetchProperties();
     }, []);
+  // Function to toggle markers
+  const toggleMarkers = (enabled: boolean) => {
+    if (clustererRef.current && mapInstanceRef.current) {
+      if (enabled) {
+        clustererRef.current.setMap(mapInstanceRef.current);
+      } else {
+        clustererRef.current.setMap(null);
+      }
+    }
+  };
+
   return {
     mapRef,
     mapInstanceRef,
@@ -314,6 +357,7 @@ export const useMap = () => {
     loading,
     properties,
     setIsClient,
-    heatmapRef
+    heatmapRef,
+    toggleMarkers
   }
 }

@@ -13,8 +13,9 @@ import { useMap } from './hooks/useMap';
 
 
 const Map = () => {
-  const {mapRef, mapInstanceRef, properties, isClient, loading, heatmapRef} = useMap();
+  const {mapRef, mapInstanceRef, properties, isClient, loading, heatmapRef, toggleMarkers} = useMap();
   const {heatmapEnabled, setHeatmapEnabled, heatmapRef: heatmapRef2} = useHeatMap({mapInstanceRef, ref: heatmapRef});
+  const [markersEnabled, setMarkersEnabled] = useState(false);
 
   
 
@@ -67,6 +68,11 @@ const Map = () => {
     setHeatmapEnabled(enabled);
   };
 
+  const handleMarkersToggle = (enabled: boolean) => {
+    setMarkersEnabled(enabled);
+    toggleMarkers(enabled);
+  };
+
   // Don't render anything until client-side to prevent hydration issues
   if (!isClient) {
     return (
@@ -94,7 +100,7 @@ const Map = () => {
       )}
       
       {/* Property Legend */}
-      {!loading && properties.length > 0 && !heatmapEnabled && (
+      {!loading && properties.length > 0 && markersEnabled && !heatmapEnabled && (
         <div className="absolute top-4 left-4 bg-white px-3 py-2 rounded-lg shadow-lg z-10">
           <div className="flex items-center gap-2 text-sm">
             <div className="flex items-center gap-1">
@@ -114,6 +120,8 @@ const Map = () => {
       <LayerControlPanel
         heatmapEnabled={heatmapEnabled}
         onHeatmapToggle={handleHeatmapToggle}
+        markersEnabled={markersEnabled}
+        onMarkersToggle={handleMarkersToggle}
         propertyCount={properties.length}
       />
 
