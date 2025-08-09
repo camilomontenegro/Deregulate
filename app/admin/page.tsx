@@ -34,6 +34,9 @@ interface FormData {
   propertyType: string;
   operation: string;
   maxRequests: number;
+  distance: number;
+  order: string;
+  sort: 'asc' | 'desc';
 }
 
 export default function AdminPage() {
@@ -47,7 +50,10 @@ export default function AdminPage() {
     city: 'Madrid',
     propertyType: 'homes',
     operation: 'sale',
-    maxRequests: 5
+    maxRequests: 5,
+    distance: 2000,
+    order: 'price',
+    sort: 'asc'
   });
 
   const cities = ['Madrid', 'Barcelona', 'Sevilla', 'Valencia', 'Bilbao', 'Málaga'];
@@ -61,6 +67,28 @@ export default function AdminPage() {
   const operations = [
     { value: 'sale', label: 'Sale' },
     { value: 'rent', label: 'Rent' }
+  ];
+
+  const distanceOptions = [
+    { value: 500, label: '500m' },
+    { value: 1000, label: '1km' },
+    { value: 2000, label: '2km (default)' },
+    { value: 3000, label: '3km' },
+    { value: 5000, label: '5km' },
+    { value: 10000, label: '10km' }
+  ];
+
+  const orderOptions = [
+    { value: 'price', label: 'Price' },
+    { value: 'publicationDate', label: 'Publication Date' },
+    { value: 'distance', label: 'Distance from Center' },
+    { value: 'size', label: 'Size (if available)' },
+    { value: 'modificationDate', label: 'Last Modified (rentals)' }
+  ];
+
+  const sortOptions = [
+    { value: 'asc', label: 'Ascending (Low to High / Old to New)' },
+    { value: 'desc', label: 'Descending (High to Low / New to Old)' }
   ];
 
   useEffect(() => {
@@ -84,7 +112,7 @@ export default function AdminPage() {
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
-      [name]: name === 'maxRequests' ? (value ? parseInt(value) || 1 : 1) : value
+      [name]: name === 'maxRequests' || name === 'distance' ? (value ? parseInt(value) || 1 : 1) : value
     }));
   };
 
@@ -219,7 +247,7 @@ export default function AdminPage() {
               <h2 className="text-lg font-medium text-gray-900 mb-4">Start Scraping</h2>
               
               <form onSubmit={handleStartScraping} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   <div>
                     <label htmlFor="city" className="block text-sm font-medium text-gray-700">
                       City
@@ -287,6 +315,66 @@ export default function AdminPage() {
                     />
                     <p className="mt-1 text-xs text-gray-500">
                       Higher values use more API credits (max 20)
+                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="distance" className="block text-sm font-medium text-gray-700">
+                      Search Radius
+                    </label>
+                    <select
+                      id="distance"
+                      name="distance"
+                      value={formData.distance}
+                      onChange={handleInputChange}
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
+                    >
+                      {distanceOptions.map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Radius from city center to search for properties
+                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="order" className="block text-sm font-medium text-gray-700">
+                      Sort By
+                    </label>
+                    <select
+                      id="order"
+                      name="order"
+                      value={formData.order}
+                      onChange={handleInputChange}
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
+                    >
+                      {orderOptions.map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      How to sort the search results
+                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="sort" className="block text-sm font-medium text-gray-700">
+                      Sort Order
+                    </label>
+                    <select
+                      id="sort"
+                      name="sort"
+                      value={formData.sort}
+                      onChange={handleInputChange}
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
+                    >
+                      {sortOptions.map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Ascending or descending order
                     </p>
                   </div>
                 </div>

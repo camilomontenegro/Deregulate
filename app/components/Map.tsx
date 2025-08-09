@@ -16,8 +16,45 @@ const Map = () => {
   const {mapRef, mapInstanceRef, properties, isClient, loading, heatmapRef, toggleMarkers} = useMap();
   const {heatmapEnabled, setHeatmapEnabled, heatmapRef: heatmapRef2} = useHeatMap({mapInstanceRef, ref: heatmapRef});
   const [markersEnabled, setMarkersEnabled] = useState(false);
+  const [heatmapSettings, setHeatmapSettings] = useState({
+    radius: 25, // Reduced from 50
+    opacity: 0.5, // Reduced from 0.8
+    weightMode: 'price' as 'price' | 'pricePerM2' | 'density',
+    maxIntensity: 3 // Reduced from 5
+  });
 
   
+  // Function to calculate weight based on mode
+  const calculateWeight = (property: any, avgPrice: number, avgPricePerM2: number, weightMode: string) => {
+    switch (weightMode) {
+      case 'pricePerM2':
+        if (!property.size || property.size <= 0) return 1; // Default for missing size
+        const pricePerM2 = property.price / property.size;
+        const pricePerM2Ratio = pricePerM2 / avgPricePerM2;
+        
+        if (pricePerM2Ratio >= 2.0) return 10;
+        if (pricePerM2Ratio >= 1.5) return 7;
+        if (pricePerM2Ratio >= 1.2) return 5;
+        if (pricePerM2Ratio >= 0.8) return 3;
+        if (pricePerM2Ratio >= 0.5) return 2;
+        return 1;
+        
+      case 'density':
+        // For density mode, all properties get equal weight (1) 
+        // The heatmap will show clustering based on geographic concentration
+        return 1;
+        
+      case 'price':
+      default:
+        const priceRatio = property.price / avgPrice;
+        if (priceRatio >= 2.0) return 10;
+        if (priceRatio >= 1.5) return 7;
+        if (priceRatio >= 1.2) return 5;
+        if (priceRatio >= 0.8) return 3;
+        if (priceRatio >= 0.5) return 2;
+        return 1;
+    }
+  };
 
   // Handle heatmap toggle
   
@@ -31,28 +68,19 @@ const Map = () => {
       
       if (validProperties.length === 0) return;
 
-      // Recalculate average price from current data
+      // Calculate averages for both price and price per m²
       const prices = validProperties.map(property => property.price);
       const avgPrice = prices.reduce((sum, price) => sum + price, 0) / prices.length;
+      
+      const pricesPerM2 = validProperties
+        .filter(property => property.size && property.size > 0)
+        .map(property => property.price / property.size);
+      const avgPricePerM2 = pricesPerM2.length > 0 
+        ? pricesPerM2.reduce((sum, price) => sum + price, 0) / pricesPerM2.length 
+        : avgPrice / 50; // fallback estimate
 
       const heatmapData = validProperties.map(property => {
-        const priceRatio = property.price / avgPrice;
-        
-        // Same weight logic as initialization for consistency
-        let weight;
-        if (priceRatio >= 2.0) {
-          weight = 10; // Very expensive = hot red
-        } else if (priceRatio >= 1.5) {
-          weight = 7; // Expensive = orange
-        } else if (priceRatio >= 1.2) {
-          weight = 5; // Above average = yellow
-        } else if (priceRatio >= 0.8) {
-          weight = 3; // Around average = green
-        } else if (priceRatio >= 0.5) {
-          weight = 1; // Below average = cyan
-        } else {
-          weight = 0.1; // Very cheap = blue/transparent
-        }
+        const weight = calculateWeight(property, avgPrice, avgPricePerM2, heatmapSettings.weightMode);
         
         return {
           location: new google.maps.LatLng(property.latitude, property.longitude),
@@ -61,8 +89,15 @@ const Map = () => {
       });
 
       heatmapRef2.current.setData(heatmapData);
+      
+      // Update heatmap settings
+      heatmapRef2.current.setOptions({
+        radius: heatmapSettings.radius,
+        opacity: heatmapSettings.opacity,
+        maxIntensity: heatmapSettings.maxIntensity
+      });
     }
-  }, [properties]);
+  }, [properties, heatmapSettings]);
 
   const handleHeatmapToggle = (enabled: boolean) => {
     setHeatmapEnabled(enabled);
@@ -123,6 +158,8 @@ const Map = () => {
         markersEnabled={markersEnabled}
         onMarkersToggle={handleMarkersToggle}
         propertyCount={properties.length}
+        heatmapSettings={heatmapSettings}
+        onHeatmapSettingsChange={setHeatmapSettings}
       />
 
       {/* Map Container */}

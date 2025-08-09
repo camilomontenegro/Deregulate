@@ -177,19 +177,19 @@ export const useMap = () => {
           };
         });
 
-        // Create heatmap layer with settings optimized for continuous gradients
+        // Create heatmap layer with settings optimized for granular data
         const heatmap = new HeatmapLayer({
           data: heatmapData,
           map: null, // Initially not shown
-          radius: 50, // Increased radius for better blending
-          opacity: 0.8, // Higher opacity for more visible gradients
-          maxIntensity: 5, // Control maximum intensity to prevent oversaturation
+          radius: 25, // Reduced radius to prevent oversized blobs
+          opacity: 0.5, // Lower opacity for better visibility of overlaps
+          maxIntensity: 3, // Lower max intensity to prevent oversaturation
           dissipating: true, // Enable dissipation for smoother gradients
           gradient: [
             'rgba(0, 0, 255, 0)', // Transparent blue (no data)
-            'rgba(0, 0, 255, 0.2)', // Light blue (low density)
-            'rgba(0, 255, 255, 0.4)', // Cyan (low-medium density)
-            'rgba(0, 255, 0, 0.6)', // Green (medium density)
+            'rgba(0, 0, 255, 0.3)', // Light blue (low density)
+            'rgba(0, 255, 255, 0.5)', // Cyan (low-medium density)
+            'rgba(0, 255, 0, 0.7)', // Green (medium density)
             'rgba(255, 255, 0, 0.8)', // Yellow (medium-high density)
             'rgba(255, 165, 0, 0.9)', // Orange (high density)
             'rgba(255, 0, 0, 1)' // Red (highest density)

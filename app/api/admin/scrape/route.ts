@@ -26,7 +26,7 @@ async function getIdealistaToken() {
   return data.access_token;
 }
 
-async function searchPropertiesInCity(city: string, propertyType: string, operation: string, page: number) {
+async function searchPropertiesInCity(city: string, propertyType: string, operation: string, page: number, distance: number, order: string, sort: string) {
   const token = await getIdealistaToken();
   
   // Simple geocoding for major Spanish cities
@@ -49,10 +49,12 @@ async function searchPropertiesInCity(city: string, propertyType: string, operat
     operation,
     propertyType,
     center,
-    distance: '2000',
+    distance: distance.toString(),
     country: 'es',
     maxItems: '50',
-    numPage: page.toString()
+    numPage: page.toString(),
+    order,
+    sort
   });
 
   const url = `https://api.idealista.com/3.5/es/search`;
@@ -86,7 +88,15 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     console.log('Request body:', body);
-    const { city, propertyType = 'homes', operation = 'sale', maxRequests = 5 } = body;
+    const { 
+      city, 
+      propertyType = 'homes', 
+      operation = 'sale', 
+      maxRequests = 5,
+      distance = 2000,
+      order = 'price',
+      sort = 'asc'
+    } = body;
 
     if (!city) {
       return NextResponse.json({ error: 'City is required' }, { status: 400 });
@@ -114,6 +124,29 @@ export async function POST(request: NextRequest) {
     if (!validOperations.includes(operation)) {
       return NextResponse.json({ 
         error: `Invalid operation. Allowed operations: ${validOperations.join(', ')}` 
+      }, { status: 400 });
+    }
+
+    // Validate distance (500m to 10km)
+    if (distance < 500 || distance > 10000) {
+      return NextResponse.json({ 
+        error: 'Distance must be between 500 and 10000 meters' 
+      }, { status: 400 });
+    }
+
+    // Validate order parameter
+    const validOrders = ['price', 'publicationDate', 'distance', 'size', 'modificationDate', 'ratioeurm2'];
+    if (!validOrders.includes(order)) {
+      return NextResponse.json({ 
+        error: `Invalid order. Allowed orders: ${validOrders.join(', ')}` 
+      }, { status: 400 });
+    }
+
+    // Validate sort parameter
+    const validSorts = ['asc', 'desc'];
+    if (!validSorts.includes(sort)) {
+      return NextResponse.json({ 
+        error: `Invalid sort. Allowed sorts: ${validSorts.join(', ')}` 
       }, { status: 400 });
     }
 
@@ -145,7 +178,7 @@ export async function POST(request: NextRequest) {
       try {
         console.log(`Scraping page ${currentPage} for ${city}...`);
         
-        const searchResults = await searchPropertiesInCity(city, propertyType, operation, currentPage);
+        const searchResults = await searchPropertiesInCity(city, propertyType, operation, currentPage, distance, order, sort);
 
         scrapingResults.requestsUsed++;
         scrapingResults.propertiesFound += (searchResults.elementList?.length || 0);
