@@ -20,24 +20,70 @@ const Map = () => {
     radius: 25, // Reduced from 50
     opacity: 0.5, // Reduced from 0.8
     weightMode: 'price' as 'price' | 'pricePerM2' | 'density',
+    scalingMode: 'average' as 'average' | 'maxPrice' | 'percentile' | 'cityMedian',
     maxIntensity: 3 // Reduced from 5
   });
 
   
+  // Function to calculate percentile value
+  const calculatePercentile = (values: number[], percentile: number) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const index = Math.ceil((percentile / 100) * sorted.length) - 1;
+    return sorted[Math.max(0, index)];
+  };
+
+  // Function to calculate median value
+  const calculateMedian = (values: number[]) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 !== 0 
+      ? sorted[mid] 
+      : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+
+  // Function to group properties by city and calculate medians
+  const calculateCityMedians = (properties: any[]) => {
+    const cityGroups: { [city: string]: number[] } = {};
+    
+    // Group properties by municipality
+    properties.forEach(property => {
+      const city = property.municipality || 'Unknown';
+      if (!cityGroups[city]) {
+        cityGroups[city] = [];
+      }
+      cityGroups[city].push(property.price);
+    });
+
+    // Calculate median for each city
+    const cityMedians: { [city: string]: number } = {};
+    Object.keys(cityGroups).forEach(city => {
+      cityMedians[city] = calculateMedian(cityGroups[city]);
+    });
+
+    return cityMedians;
+  };
+
+  // Function to calculate scaling reference based on mode
+  const getScalingReference = (values: number[], mode: string) => {
+    switch (mode) {
+      case 'maxPrice':
+        return Math.max(...values);
+      case 'percentile':
+        return calculatePercentile(values, 95); // 95th percentile
+      case 'average':
+      default:
+        return values.reduce((sum, price) => sum + price, 0) / values.length;
+    }
+  };
+
   // Function to calculate weight based on mode
-  const calculateWeight = (property: any, avgPrice: number, avgPricePerM2: number, weightMode: string) => {
+  const calculateWeight = (property: any, scalingReference: number, avgPricePerM2: number, weightMode: string, scalingMode: string, cityMedians?: { [city: string]: number }) => {
     switch (weightMode) {
       case 'pricePerM2':
         if (!property.size || property.size <= 0) return 1; // Default for missing size
         const pricePerM2 = property.price / property.size;
         const pricePerM2Ratio = pricePerM2 / avgPricePerM2;
-        
-        if (pricePerM2Ratio >= 2.0) return 10;
-        if (pricePerM2Ratio >= 1.5) return 7;
-        if (pricePerM2Ratio >= 1.2) return 5;
-        if (pricePerM2Ratio >= 0.8) return 3;
-        if (pricePerM2Ratio >= 0.5) return 2;
-        return 1;
+        return calculateWeightFromRatio(pricePerM2Ratio, scalingMode);
         
       case 'density':
         // For density mode, all properties get equal weight (1) 
@@ -46,13 +92,48 @@ const Map = () => {
         
       case 'price':
       default:
-        const priceRatio = property.price / avgPrice;
-        if (priceRatio >= 2.0) return 10;
-        if (priceRatio >= 1.5) return 7;
-        if (priceRatio >= 1.2) return 5;
-        if (priceRatio >= 0.8) return 3;
-        if (priceRatio >= 0.5) return 2;
-        return 1;
+        let referencePrice = scalingReference;
+        
+        // For city median mode, use the property's city median as reference
+        if (scalingMode === 'cityMedian' && cityMedians) {
+          const propertyCity = property.municipality || 'Unknown';
+          referencePrice = cityMedians[propertyCity] || scalingReference; // fallback to overall reference
+        }
+        
+        const priceRatio = property.price / referencePrice;
+        return calculateWeightFromRatio(priceRatio, scalingMode);
+    }
+  };
+
+  // Function to calculate weight from ratio based on scaling mode
+  const calculateWeightFromRatio = (ratio: number, scalingMode: string) => {
+    if (scalingMode === 'maxPrice') {
+      // For max price mode, only the maximum gets weight 10, others scale proportionally
+      return Math.min(10, Math.max(0.1, ratio * 10));
+    } else if (scalingMode === 'percentile') {
+      // For percentile mode, 95th percentile gets weight 10
+      if (ratio >= 1.0) return 10; // At or above 95th percentile
+      if (ratio >= 0.8) return 7;
+      if (ratio >= 0.6) return 5;
+      if (ratio >= 0.4) return 3;
+      if (ratio >= 0.2) return 2;
+      return 1;
+    } else if (scalingMode === 'cityMedian') {
+      // For city median mode, use median as reference point (similar to average)
+      if (ratio >= 2.0) return 10; // 2x city median = very expensive for that city
+      if (ratio >= 1.5) return 7;  // 1.5x city median = expensive for that city
+      if (ratio >= 1.2) return 5;  // 1.2x city median = above median for that city
+      if (ratio >= 0.8) return 3;  // Around city median
+      if (ratio >= 0.5) return 2;  // Below city median
+      return 1;                    // Well below city median
+    } else {
+      // For average mode (original logic)
+      if (ratio >= 2.0) return 10;
+      if (ratio >= 1.5) return 7;
+      if (ratio >= 1.2) return 5;
+      if (ratio >= 0.8) return 3;
+      if (ratio >= 0.5) return 2;
+      return 1;
     }
   };
 
@@ -68,19 +149,32 @@ const Map = () => {
       
       if (validProperties.length === 0) return;
 
-      // Calculate averages for both price and price per m²
+      // Calculate reference values for scaling
       const prices = validProperties.map(property => property.price);
-      const avgPrice = prices.reduce((sum, price) => sum + price, 0) / prices.length;
+      const scalingReference = getScalingReference(prices, heatmapSettings.scalingMode);
+      
+      // Calculate city medians for city median mode
+      const cityMedians = heatmapSettings.scalingMode === 'cityMedian' 
+        ? calculateCityMedians(validProperties) 
+        : undefined;
       
       const pricesPerM2 = validProperties
         .filter(property => property.size && property.size > 0)
         .map(property => property.price / property.size);
       const avgPricePerM2 = pricesPerM2.length > 0 
         ? pricesPerM2.reduce((sum, price) => sum + price, 0) / pricesPerM2.length 
-        : avgPrice / 50; // fallback estimate
+        : scalingReference / 50; // fallback estimate
+
+      // Log scaling info for debugging
+      console.log(`Scaling mode: ${heatmapSettings.scalingMode}, Reference: €${scalingReference.toLocaleString()}`);
+      if (cityMedians) {
+        console.log('City medians:', Object.entries(cityMedians).map(([city, median]) => 
+          `${city}: €${median.toLocaleString()}`
+        ).join(', '));
+      }
 
       const heatmapData = validProperties.map(property => {
-        const weight = calculateWeight(property, avgPrice, avgPricePerM2, heatmapSettings.weightMode);
+        const weight = calculateWeight(property, scalingReference, avgPricePerM2, heatmapSettings.weightMode, heatmapSettings.scalingMode, cityMedians);
         
         return {
           location: new google.maps.LatLng(property.latitude, property.longitude),

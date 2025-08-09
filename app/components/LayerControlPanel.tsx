@@ -13,6 +13,7 @@ interface LayerControlPanelProps {
     radius: number;
     opacity: number;
     weightMode: 'price' | 'pricePerM2' | 'density';
+    scalingMode: 'average' | 'maxPrice' | 'percentile' | 'cityMedian';
     maxIntensity: number;
   };
   onHeatmapSettingsChange?: (settings: any) => void;
@@ -147,6 +148,29 @@ const LayerControlPanel = ({
                         <option value="pricePerM2">Price per m²</option>
                         <option value="density">Property Density</option>
                       </select>
+                    </div>
+
+                    {/* Scaling Mode */}
+                    <div className="relative">
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Scaling Mode
+                      </label>
+                      <select
+                        value={heatmapSettings.scalingMode}
+                        onChange={(e) => handleSettingChange('scalingMode', e.target.value)}
+                        className="w-full text-xs border border-gray-300 rounded px-2 py-1 relative z-10"
+                      >
+                        <option value="average">Average Based</option>
+                        <option value="maxPrice">Max Price Based</option>
+                        <option value="percentile">95th Percentile</option>
+                        <option value="cityMedian">City Median</option>
+                      </select>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {heatmapSettings.scalingMode === 'average' && 'Uses average price as reference (1.0)'}
+                        {heatmapSettings.scalingMode === 'maxPrice' && 'Most expensive property = maximum red'}
+                        {heatmapSettings.scalingMode === 'percentile' && '95% of properties below reference'}
+                        {heatmapSettings.scalingMode === 'cityMedian' && 'Each property compared to its city median'}
+                      </div>
                     </div>
 
                     {/* Max Intensity */}
