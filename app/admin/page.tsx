@@ -37,8 +37,6 @@ interface FormData {
   distance: number;
   order: string;
   sort: 'asc' | 'desc';
-  randomMode: boolean;
-  provinceWide: boolean;
 }
 
 export default function AdminPage() {
@@ -55,9 +53,7 @@ export default function AdminPage() {
     maxRequests: 5,
     distance: 2000,
     order: 'price',
-    sort: 'asc',
-    randomMode: false,
-    provinceWide: false
+    sort: 'asc'
   });
 
   const cities = ['Madrid', 'Barcelona', 'Sevilla', 'Valencia', 'Bilbao', 'Málaga'];
@@ -79,7 +75,8 @@ export default function AdminPage() {
     { value: 2000, label: '2km (default)' },
     { value: 3000, label: '3km' },
     { value: 5000, label: '5km' },
-    { value: 10000, label: '10km' }
+    { value: 10000, label: '10km' },
+    { value: -1, label: 'Random Distance (0m-10km)' }
   ];
 
   const orderOptions = [
@@ -340,7 +337,7 @@ export default function AdminPage() {
                       ))}
                     </select>
                     <p className="mt-1 text-xs text-gray-500">
-                      Radius from city center to search for properties
+                      Radius from city center. Province-wide search includes nearby towns automatically.
                     </p>
                   </div>
 
@@ -382,46 +379,6 @@ export default function AdminPage() {
                     <p className="mt-1 text-xs text-gray-500">
                       Ascending or descending order
                     </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-gray-200">
-                  <div className="flex items-center">
-                    <input
-                      type="checkbox"
-                      id="randomMode"
-                      name="randomMode"
-                      checked={formData.randomMode}
-                      onChange={handleInputChange}
-                      className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-                    />
-                    <label htmlFor="randomMode" className="ml-2 block text-sm text-gray-900">
-                      Random Mode
-                    </label>
-                    <div className="ml-2">
-                      <span className="text-xs text-gray-500">
-                        Sample random pages and vary search parameters for better diversity
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center">
-                    <input
-                      type="checkbox"
-                      id="provinceWide"
-                      name="provinceWide"
-                      checked={formData.provinceWide}
-                      onChange={handleInputChange}
-                      className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-                    />
-                    <label htmlFor="provinceWide" className="ml-2 block text-sm text-gray-900">
-                      Province-Wide Search
-                    </label>
-                    <div className="ml-2">
-                      <span className="text-xs text-gray-500">
-                        Include towns and smaller cities across the entire province
-                      </span>
-                    </div>
                   </div>
                 </div>
 

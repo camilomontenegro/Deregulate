@@ -20,7 +20,7 @@ const Map = () => {
     radius: 25, // Reduced from 50
     opacity: 0.5, // Reduced from 0.8
     weightMode: 'price' as 'price' | 'pricePerM2' | 'density',
-    scalingMode: 'average' as 'average' | 'maxPrice' | 'percentile' | 'cityMedian',
+    scalingMode: 'average' as 'average' | 'maxPrice' | 'percentile' | 'cityMedian' | 'minMax',
     maxIntensity: 3 // Reduced from 5
   });
 
@@ -70,6 +70,11 @@ const Map = () => {
         return Math.max(...values);
       case 'percentile':
         return calculatePercentile(values, 95); // 95th percentile
+      case 'minMax':
+        return {
+          min: Math.min(...values),
+          max: Math.max(...values)
+        };
       case 'average':
       default:
         return values.reduce((sum, price) => sum + price, 0) / values.length;
@@ -77,11 +82,30 @@ const Map = () => {
   };
 
   // Function to calculate weight based on mode
-  const calculateWeight = (property: any, scalingReference: number, avgPricePerM2: number, weightMode: string, scalingMode: string, cityMedians?: { [city: string]: number }) => {
+  const calculateWeight = (property: any, scalingReference: number | { min: number; max: number }, avgPricePerM2: number, weightMode: string, scalingMode: string, cityMedians?: { [city: string]: number }, pricePerM2Range?: { min: number; max: number }) => {
     switch (weightMode) {
       case 'pricePerM2':
         if (!property.size || property.size <= 0) return 1; // Default for missing size
         const pricePerM2 = property.price / property.size;
+        
+        // Handle minMax scaling for price per m2
+        if (scalingMode === 'minMax' && pricePerM2Range) {
+          const { min, max } = pricePerM2Range;
+          
+          if (max === min) {
+            return 5; // Middle weight for uniform pricing per m2
+          }
+          
+          const normalizedPricePerM2 = (pricePerM2 - min) / (max - min);
+          
+          // Top 1% get pink ultra-premium treatment
+          if (normalizedPricePerM2 >= 0.99) {
+            return 12; // Special weight for pink ultra-premium
+          }
+          
+          return Math.max(0.1, Math.min(10, normalizedPricePerM2 * 10));
+        }
+        
         const pricePerM2Ratio = pricePerM2 / avgPricePerM2;
         return calculateWeightFromRatio(pricePerM2Ratio, scalingMode);
         
@@ -92,12 +116,33 @@ const Map = () => {
         
       case 'price':
       default:
-        let referencePrice = scalingReference;
+        // Handle minMax scaling mode with direct normalization
+        if (scalingMode === 'minMax' && typeof scalingReference === 'object') {
+          const { min, max } = scalingReference;
+          
+          // Handle edge case where min === max (all properties same price)
+          if (max === min) {
+            return 5; // Middle weight for uniform pricing
+          }
+          
+          // Min-max normalization: (value - min) / (max - min)
+          const normalizedPrice = (property.price - min) / (max - min);
+          
+          // Top 1% get pink ultra-premium treatment
+          if (normalizedPrice >= 0.99) {
+            return 12; // Special weight for pink ultra-premium
+          }
+          
+          // Scale to 0.1-10 range for heatmap weights
+          return Math.max(0.1, Math.min(10, normalizedPrice * 10));
+        }
+        
+        let referencePrice = typeof scalingReference === 'number' ? scalingReference : 0;
         
         // For city median mode, use the property's city median as reference
         if (scalingMode === 'cityMedian' && cityMedians) {
           const propertyCity = property.municipality || 'Unknown';
-          referencePrice = cityMedians[propertyCity] || scalingReference; // fallback to overall reference
+          referencePrice = cityMedians[propertyCity] || referencePrice; // fallback to overall reference
         }
         
         const priceRatio = property.price / referencePrice;
@@ -163,10 +208,25 @@ const Map = () => {
         .map(property => property.price / property.size);
       const avgPricePerM2 = pricesPerM2.length > 0 
         ? pricesPerM2.reduce((sum, price) => sum + price, 0) / pricesPerM2.length 
-        : scalingReference / 50; // fallback estimate
+        : (typeof scalingReference === 'number' ? scalingReference : (scalingReference.min + scalingReference.max) / 2) / 50; // fallback estimate
+
+      // Calculate price per m2 range for minMax mode
+      const pricePerM2Range = heatmapSettings.scalingMode === 'minMax' && pricesPerM2.length > 0
+        ? {
+            min: Math.min(...pricesPerM2),
+            max: Math.max(...pricesPerM2)
+          }
+        : undefined;
 
       // Log scaling info for debugging
-      console.log(`Scaling mode: ${heatmapSettings.scalingMode}, Reference: €${scalingReference.toLocaleString()}`);
+      if (heatmapSettings.scalingMode === 'minMax' && typeof scalingReference === 'object') {
+        console.log(`MinMax scaling mode: Price range €${scalingReference.min.toLocaleString()} - €${scalingReference.max.toLocaleString()}`);
+        if (pricePerM2Range) {
+          console.log(`Price per m² range: €${pricePerM2Range.min.toLocaleString()} - €${pricePerM2Range.max.toLocaleString()}`);
+        }
+      } else {
+        console.log(`Scaling mode: ${heatmapSettings.scalingMode}, Reference: €${typeof scalingReference === 'number' ? scalingReference.toLocaleString() : 'N/A'}`);
+      }
       if (cityMedians) {
         console.log('City medians:', Object.entries(cityMedians).map(([city, median]) => 
           `${city}: €${median.toLocaleString()}`
@@ -174,7 +234,7 @@ const Map = () => {
       }
 
       const heatmapData = validProperties.map(property => {
-        const weight = calculateWeight(property, scalingReference, avgPricePerM2, heatmapSettings.weightMode, heatmapSettings.scalingMode, cityMedians);
+        const weight = calculateWeight(property, scalingReference, avgPricePerM2, heatmapSettings.weightMode, heatmapSettings.scalingMode, cityMedians, pricePerM2Range);
         
         return {
           location: new google.maps.LatLng(property.latitude, property.longitude),
@@ -184,12 +244,31 @@ const Map = () => {
 
       heatmapRef2.current.setData(heatmapData);
       
-      // Update heatmap settings
-      heatmapRef2.current.setOptions({
+      // Define gradient based on scaling mode - add pink for minMax ultra-premium
+      const heatmapGradient = heatmapSettings.scalingMode === 'minMax' 
+        ? [
+            'rgba(0, 0, 255, 0)',         // Transparent blue (no data)
+            'rgba(0, 0, 255, 0.3)',       // Light blue (cheapest)
+            'rgba(0, 255, 255, 0.5)',     // Cyan (below average)
+            'rgba(0, 255, 0, 0.7)',       // Green (average)
+            'rgba(255, 255, 0, 0.8)',     // Yellow (above average)
+            'rgba(255, 0, 0, 0.9)',       // Red (expensive)
+            'rgba(255, 20, 147, 1)'       // Pink (ultra-premium top 10%)
+          ]
+        : undefined; // Use default gradient for other modes
+
+      // Update heatmap settings including gradient for minMax mode
+      const heatmapOptions: any = {
         radius: heatmapSettings.radius,
         opacity: heatmapSettings.opacity,
         maxIntensity: heatmapSettings.maxIntensity
-      });
+      };
+
+      if (heatmapGradient) {
+        heatmapOptions.gradient = heatmapGradient;
+      }
+
+      heatmapRef2.current.setOptions(heatmapOptions);
     }
   }, [properties, heatmapSettings]);
 

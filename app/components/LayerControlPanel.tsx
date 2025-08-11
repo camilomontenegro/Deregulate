@@ -13,7 +13,7 @@ interface LayerControlPanelProps {
     radius: number;
     opacity: number;
     weightMode: 'price' | 'pricePerM2' | 'density';
-    scalingMode: 'average' | 'maxPrice' | 'percentile' | 'cityMedian';
+    scalingMode: 'average' | 'maxPrice' | 'percentile' | 'cityMedian' | 'minMax';
     maxIntensity: number;
   };
   onHeatmapSettingsChange?: (settings: any) => void;
@@ -164,12 +164,14 @@ const LayerControlPanel = ({
                         <option value="maxPrice">Max Price Based</option>
                         <option value="percentile">95th Percentile</option>
                         <option value="cityMedian">City Median</option>
+                        <option value="minMax">Min-Max Relative</option>
                       </select>
                       <div className="text-xs text-gray-500 mt-1">
                         {heatmapSettings.scalingMode === 'average' && 'Uses average price as reference (1.0)'}
                         {heatmapSettings.scalingMode === 'maxPrice' && 'Most expensive property = maximum red'}
                         {heatmapSettings.scalingMode === 'percentile' && '95% of properties below reference'}
                         {heatmapSettings.scalingMode === 'cityMedian' && 'Each property compared to its city median'}
+                        {heatmapSettings.scalingMode === 'minMax' && 'Cheapest = blue, most expensive = red (relative to current view)'}
                       </div>
                     </div>
 
@@ -195,32 +197,68 @@ const LayerControlPanel = ({
             {/* Legend */}
             {heatmapEnabled && (
               <div className="border-t border-gray-200 pt-3">
-                <div className="text-sm font-medium text-gray-900 mb-2">Price Comparison</div>
+                <div className="text-sm font-medium text-gray-900 mb-2">
+                  {heatmapSettings?.scalingMode === 'minMax' ? 'Relative Price Range' : 'Price Comparison'}
+                </div>
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-blue-400"></div>
-                    <span className="text-xs text-gray-600">Very cheap (&lt;50% avg)</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-cyan-400"></div>
-                    <span className="text-xs text-gray-600">Below average</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-green-400"></div>
-                    <span className="text-xs text-gray-600">Around average</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
-                    <span className="text-xs text-gray-600">Above average</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-orange-500"></div>
-                    <span className="text-xs text-gray-600">Expensive</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                    <span className="text-xs text-gray-600">Very expensive (2x+ avg)</span>
-                  </div>
+                  {heatmapSettings?.scalingMode === 'minMax' ? (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-blue-400"></div>
+                        <span className="text-xs text-gray-600">Cheapest in view</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-cyan-400"></div>
+                        <span className="text-xs text-gray-600">Below middle range</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-green-400"></div>
+                        <span className="text-xs text-gray-600">Mid-range</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
+                        <span className="text-xs text-gray-600">Above middle range</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                        <span className="text-xs text-gray-600">Expensive</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full" style={{backgroundColor: 'rgb(255, 20, 147)'}}></div>
+                        <span className="text-xs text-gray-600">Ultra-Premium (Top 1%)</span>
+                      </div>
+                      <div className="mt-2 text-xs text-gray-500 italic">
+                        ⚠️ Colors relative to current dataset only
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-blue-400"></div>
+                        <span className="text-xs text-gray-600">Very cheap (&lt;50% avg)</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-cyan-400"></div>
+                        <span className="text-xs text-gray-600">Below average</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-green-400"></div>
+                        <span className="text-xs text-gray-600">Around average</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
+                        <span className="text-xs text-gray-600">Above average</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+                        <span className="text-xs text-gray-600">Expensive</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                        <span className="text-xs text-gray-600">Very expensive (2x+ avg)</span>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )}

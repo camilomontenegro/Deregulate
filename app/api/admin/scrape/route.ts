@@ -6,68 +6,85 @@ export async function GET() {
 }
 
 // Inline Idealista API functions
-async function getIdealistaToken() {
-  const credentials = Buffer.from(`${process.env.IDEALISTA_API_KEY}:${process.env.IDEALISTA_SECRET}`).toString('base64');
+async function getIdealistaToken(retryCount = 0) {
+  const maxRetries = 3;
   
-  const response = await fetch('https://api.idealista.com/oauth/token', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Basic ${credentials}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: 'grant_type=client_credentials&scope=read'
-  });
-
-  if (!response.ok) {
-    throw new Error(`Token request failed: ${response.status}`);
+  // Validate environment variables
+  if (!process.env.IDEALISTA_API_KEY || !process.env.IDEALISTA_SECRET) {
+    throw new Error('Missing IDEALISTA_API_KEY or IDEALISTA_SECRET environment variables');
   }
 
-  const data = await response.json();
-  return data.access_token;
+  try {
+    const credentials = Buffer.from(`${process.env.IDEALISTA_API_KEY}:${process.env.IDEALISTA_SECRET}`).toString('base64');
+    
+    const response = await fetch('https://api.idealista.com/oauth/token', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${credentials}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: 'grant_type=client_credentials&scope=read',
+      // Add timeout and connection options
+      signal: AbortSignal.timeout(30000) // 30 second timeout
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Token request failed: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    
+    if (!data.access_token) {
+      throw new Error('No access token received from Idealista API');
+    }
+    
+    console.log('✅ Successfully obtained Idealista token');
+    return data.access_token;
+    
+  } catch (error: any) {
+    console.error(`❌ Token request attempt ${retryCount + 1} failed:`, error.message);
+    
+    if (retryCount < maxRetries) {
+      console.log(`⏳ Retrying token request in ${(retryCount + 1) * 1000}ms...`);
+      await new Promise(resolve => setTimeout(resolve, (retryCount + 1) * 1000));
+      return getIdealistaToken(retryCount + 1);
+    }
+    
+    throw new Error(`Failed to get Idealista token after ${maxRetries + 1} attempts: ${error.message}`);
+  }
 }
 
-// Generate smart random page sequence that avoids empty pages
+// Generate conservative random page sequence 
 function generateSmartRandomPageSequence(maxRequests: number, totalAvailablePages: number = 0): number[] {
   const pages = new Set<number>();
   
-  // Be very conservative with page limits to ensure we get data
-  let safeMaxPage: number;
-  if (totalAvailablePages > 0) {
-    // Use at most 75% of available pages, capped at 15 for safety
-    safeMaxPage = Math.min(Math.ceil(totalAvailablePages * 0.75), 15);
-  } else {
-    // Ultra-conservative when unknown
-    safeMaxPage = 3;
-  }
+  // Be very conservative with page range to prevent API waste
+  let maxPage = Math.min(totalAvailablePages > 0 ? totalAvailablePages : 10, 15);
   
-  console.log(`Safe page limit set to ${safeMaxPage} (from ${totalAvailablePages} total pages)`);
+  console.log(`Generating ${maxRequests} random pages from 1-${maxPage} (${totalAvailablePages} total available)`);
   
-  // Always include page 1 as it's most likely to have data
+  // Always start with page 1
   pages.add(1);
   
-  // For remaining requests, be much more conservative
-  while (pages.size < maxRequests && pages.size < safeMaxPage) {
+  // Add a few more pages conservatively, favoring early pages
+  for (let i = 1; i < maxRequests && pages.size < maxRequests; i++) {
     let randomPage: number;
     
-    if (totalAvailablePages === 0) {
-      // Conservative approach when we don't know total pages - stick to first few pages
-      randomPage = Math.floor(Math.random() * 3) + 1; // Pages 1-3 only
-    } else if (pages.size < maxRequests / 2) {
-      // First half of requests: heavily favor early pages (90% from pages 1-5)
-      randomPage = Math.random() < 0.9 
-        ? Math.floor(Math.random() * 5) + 1  // 90% from pages 1-5
-        : Math.floor(Math.random() * Math.min(safeMaxPage, 10)) + 1; // 10% from pages 1-10
+    // 70% chance for pages 1-5, 30% chance for pages 6-maxPage
+    if (Math.random() < 0.7) {
+      randomPage = Math.floor(Math.random() * Math.min(5, maxPage)) + 1;
     } else {
-      // Second half: slightly more adventurous but still conservative
-      randomPage = Math.random() < 0.7 
-        ? Math.floor(Math.random() * 8) + 1  // 70% from pages 1-8
-        : Math.floor(Math.random() * safeMaxPage) + 1; // 30% from all available
+      randomPage = Math.floor(Math.random() * maxPage) + 1;
     }
     
     pages.add(randomPage);
   }
   
-  return Array.from(pages).sort((a, b) => a - b);
+  const finalPages = Array.from(pages).sort((a, b) => a - b);
+  console.log(`Generated ${finalPages.length} conservative pages: [${finalPages.join(', ')}]`);
+  
+  return finalPages;
 }
 
 
@@ -165,36 +182,29 @@ const provinceCoords: { [key: string]: { main: string; towns: string[] } } = {
   }
 };
 
-async function searchPropertiesInCity(city: string, propertyType: string, operation: string, page: number, distance: number, order: string, sort: string, randomMode: boolean = false, provinceWide: boolean = false) {
+async function searchPropertiesInCity(city: string, propertyType: string, operation: string, page: number, distance: number, order: string, sort: string) {
   const token = await getIdealistaToken();
   
+  // Always use province-wide search for better coverage
   let center: string;
-  
-  if (provinceWide && provinceCoords[city]) {
+  if (provinceCoords[city]) {
     // Select random town from the province for variety
     const availableLocations = [provinceCoords[city].main, ...provinceCoords[city].towns];
     center = availableLocations[Math.floor(Math.random() * availableLocations.length)];
-  } else if (provinceCoords[city]) {
-    center = provinceCoords[city].main;
   } else {
     throw new Error(`Coordinates not found for city: ${city}`);
   }
 
-  // Apply randomization if enabled
+  // Handle random distance option
+  let finalDistance = distance;
+  if (distance === -1) {
+    // Random distance from 0m (exact center) to 10km (province-wide coverage)
+    finalDistance = Math.floor(Math.random() * 10000);
+    console.log(`🎲 Using random distance: ${finalDistance}m from center ${center}`);
+  }
+  
   let finalOrder = order;
   let finalSort = sort;
-  let finalDistance = distance;
-  
-  if (randomMode) {
-    // Randomize sort order for variety
-    const orderOptions = ['price', 'publicationDate', 'distance', 'size'];
-    finalOrder = orderOptions[Math.floor(Math.random() * orderOptions.length)];
-    finalSort = Math.random() > 0.5 ? 'asc' : 'desc';
-    
-    // Add slight distance variation (±20%) for geographic diversity
-    const distanceVariation = 0.8 + (Math.random() * 0.4);
-    finalDistance = Math.floor(distance * distanceVariation);
-  }
 
   // Correct Idealista API endpoint structure - POST with form data
   const params = new URLSearchParams({
@@ -212,29 +222,61 @@ async function searchPropertiesInCity(city: string, propertyType: string, operat
   });
 
   const url = `https://api.idealista.com/3.5/es/search`;
-  console.log('Idealista API URL:', url);
-  console.log('Idealista API params:', params.toString());
+  console.log(`🔍 Searching ${city} page ${page}:`, params.toString());
   
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: params.toString()
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: params.toString(),
+      // Add timeout and connection options
+      signal: AbortSignal.timeout(45000) // 45 second timeout for search
+    });
 
-  console.log('Idealista API response status:', response.status);
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Idealista API error:', errorText);
-    throw new Error(`Search request failed: ${response.status} - ${errorText}`);
+    console.log(`📡 API Response Status: ${response.status}`);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ Idealista API error (${response.status}):`, errorText);
+      
+      // Handle specific error cases
+      if (response.status === 401) {
+        throw new Error(`Authentication failed - token may be expired: ${errorText}`);
+      } else if (response.status === 429) {
+        throw new Error(`Rate limit exceeded - too many requests: ${errorText}`);
+      } else if (response.status >= 500) {
+        throw new Error(`Idealista server error (${response.status}): ${errorText}`);
+      }
+      
+      throw new Error(`Search request failed: ${response.status} - ${errorText}`);
+    }
+
+    const result = await response.json();
+    
+    // Validate response structure
+    if (!result) {
+      throw new Error('Empty response from Idealista API');
+    }
+    
+    console.log(`✅ Found ${result.elementList?.length || 0} properties on page ${page}`);
+    return result;
+    
+  } catch (error: any) {
+    // Distinguish between network errors and API errors
+    if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+      throw new Error(`Request timeout for ${city} page ${page} - try again later`);
+    }
+    
+    if (error.message.includes('fetch failed')) {
+      throw new Error(`Network connection failed for ${city} page ${page} - check internet connection`);
+    }
+    
+    // Re-throw other errors as-is
+    throw error;
   }
-
-  const result = await response.json();
-  console.log('Idealista API result:', result);
-  return result;
 }
 
 export async function POST(request: NextRequest) {
@@ -249,9 +291,7 @@ export async function POST(request: NextRequest) {
       maxRequests = 5,
       distance = 2000,
       order = 'price',
-      sort = 'asc',
-      randomMode = false,
-      provinceWide = false
+      sort = 'asc'
     } = body;
 
     if (!city) {
@@ -283,10 +323,10 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Validate distance (500m to 10km)
-    if (distance < 500 || distance > 10000) {
+    // Validate distance (500m to 10km or -1 for random)
+    if (distance !== -1 && (distance < 500 || distance > 10000)) {
       return NextResponse.json({ 
-        error: 'Distance must be between 500 and 10000 meters' 
+        error: 'Distance must be between 500 and 10000 meters, or -1 for random distance' 
       }, { status: 400 });
     }
 
@@ -330,35 +370,38 @@ export async function POST(request: NextRequest) {
     );
 
     // Generate page sequence and get probe results if available
-    console.log(`Generating page sequence for ${city} (Random: ${randomMode}, Province-wide: ${provinceWide})`);
+    const useRandomMode = distance === -1; // Enable random behavior when random distance is selected
+    console.log(`Generating page sequence for ${city} (Random distance mode: ${useRandomMode})`);
     
     let probeResults: any = null;
     let pagesToScrape: number[];
     
-    if (randomMode) {
+    if (useRandomMode) {
       try {
-        // Do the probe and get results
-        console.log('Probing first page to understand data availability...');
+        // Conservative probe - only check page 1
+        console.log('Probing first page to check data availability...');
         probeResults = await searchPropertiesInCity(
-          city, propertyType, operation, 1, distance, order, sort, false, provinceWide
+          city, propertyType, operation, 1, distance, order, sort
         );
         
-        const totalPages = probeResults.totalPages || 0;
         const hasData = probeResults.elementList && probeResults.elementList.length > 0;
+        const reportedPages = probeResults.totalPages || 0;
         
-        console.log(`First page probe: ${probeResults.elementList?.length || 0} properties, ${totalPages} total pages`);
+        console.log(`First page probe: ${probeResults.elementList?.length || 0} properties found`);
         
         if (!hasData) {
-          console.log('No data found on first page, using sequential fallback');
-          pagesToScrape = [1];
+          console.log('⚠️ No data found on page 1, falling back to conservative sequential approach');
+          pagesToScrape = Array.from({length: Math.min(maxRequests, 3)}, (_, i) => i + 1);
         } else {
-          pagesToScrape = generateSmartRandomPageSequence(maxRequests, totalPages);
-          console.log(`Generated smart random sequence based on ${totalPages} available pages`);
+          // Be conservative with reported totalPages as it can be unreliable
+          const conservativeTotalPages = Math.min(reportedPages, 10);
+          pagesToScrape = generateSmartRandomPageSequence(maxRequests, conservativeTotalPages);
+          console.log(`Generated conservative random sequence (ignoring reported ${reportedPages} pages, using max 10)`);
         }
         
         scrapingResults.requestsUsed = 1; // Count the probe request
       } catch (error) {
-        console.error('Error during probe, falling back to conservative sequential:', error);
+        console.error('Probe request failed, using safe sequential mode:', error);
         pagesToScrape = Array.from({length: Math.min(maxRequests, 3)}, (_, i) => i + 1);
         probeResults = null;
       }
@@ -366,7 +409,10 @@ export async function POST(request: NextRequest) {
       pagesToScrape = Array.from({length: maxRequests}, (_, i) => i + 1);
     }
     
-    console.log(`${randomMode ? 'Adaptive random' : 'Sequential'} mode: Scraping pages ${pagesToScrape.join(', ')}`);
+    console.log(`${useRandomMode ? 'Random distance' : 'Sequential'} mode: Scraping pages ${pagesToScrape.join(', ')}`);
+
+    let consecutiveEmptyPages = 0;
+    const maxConsecutiveEmpty = 2; // Stop after 2 consecutive empty pages to prevent API waste
 
     for (let i = 0; i < pagesToScrape.length; i++) {
       const pageNumber = pagesToScrape[i];
@@ -374,7 +420,7 @@ export async function POST(request: NextRequest) {
       
       try {
         // Use cached probe results for page 1 in random mode
-        if (randomMode && pageNumber === 1 && probeResults) {
+        if (useRandomMode && pageNumber === 1 && probeResults) {
           console.log(`Using cached probe results for page 1`);
           searchResults = probeResults;
         } else {
@@ -387,9 +433,7 @@ export async function POST(request: NextRequest) {
             pageNumber, 
             distance, 
             order, 
-            sort, 
-            randomMode, 
-            provinceWide
+            sort
           );
           
           scrapingResults.requestsUsed++;
@@ -403,8 +447,17 @@ export async function POST(request: NextRequest) {
         });
 
         if (!searchResults.elementList || searchResults.elementList.length === 0) {
-          console.log(`No properties found on page ${pageNumber}, continuing with next page...`);
+          consecutiveEmptyPages++;
+          console.log(`No properties found on page ${pageNumber} (${consecutiveEmptyPages}/${maxConsecutiveEmpty} consecutive empty pages)`);
+          
+          // Early termination to prevent API waste
+          if (consecutiveEmptyPages >= maxConsecutiveEmpty) {
+            console.log(`⚠️ Stopping scraping after ${consecutiveEmptyPages} consecutive empty pages to prevent API waste`);
+            break;
+          }
           continue;
+        } else {
+          consecutiveEmptyPages = 0; // Reset counter when we find results
         }
 
         // Filter for active properties only (double-check since API might not enforce it)
@@ -432,12 +485,33 @@ export async function POST(request: NextRequest) {
     }
 
     // Store properties in Supabase
+    console.log(`💾 Starting database insertion for ${allProperties.length} properties...`);
+    
     if (allProperties.length > 0) {
       let inserted = 0;
       let skipped = 0;
+      let dbErrors = 0;
+      
+      // Validate Supabase client
+      if (!supabase) {
+        throw new Error('Supabase client not initialized - check environment variables');
+      }
       
       for (const property of allProperties) {
         try {
+          // Validate required property data
+          if (!property.propertyCode) {
+            console.warn(`⚠️ Skipping property without propertyCode:`, property);
+            skipped++;
+            continue;
+          }
+          
+          if (!property.price || property.price <= 0) {
+            console.warn(`⚠️ Skipping property with invalid price:`, property.propertyCode, property.price);
+            skipped++;
+            continue;
+          }
+
           const propertyData = {
             property_code: property.propertyCode,
             address: property.address || '',
@@ -461,39 +535,56 @@ export async function POST(request: NextRequest) {
             scraped_at: new Date().toISOString()
           };
 
-          const { error } = await supabase
+          console.log(`💾 Inserting property ${property.propertyCode} - €${property.price?.toLocaleString()}`);
+
+          const { data, error } = await supabase
             .from('houses')
-            .insert([propertyData]);
+            .insert([propertyData])
+            .select();
 
           if (error) {
             if (error.code === '23505') { // Unique constraint violation
+              console.log(`⏭️ Property ${property.propertyCode} already exists, skipping`);
               skipped++;
             } else {
-              throw error;
+              console.error(`❌ Database error for property ${property.propertyCode}:`, error);
+              dbErrors++;
+              scrapingResults.errors.push({
+                operation: 'database_insert',
+                property_code: property.propertyCode,
+                error: error.message
+              });
             }
           } else {
+            console.log(`✅ Successfully inserted property ${property.propertyCode}`);
             inserted++;
           }
         } catch (error: any) {
-          console.error('Error inserting property:', error);
+          console.error(`💥 Unexpected error inserting property ${property?.propertyCode}:`, error);
+          dbErrors++;
           scrapingResults.errors.push({
             operation: 'database_insert',
+            property_code: property?.propertyCode || 'unknown',
             error: error.message
           });
         }
       }
       
+      console.log(`📊 Database insertion complete: ${inserted} inserted, ${skipped} skipped, ${dbErrors} errors`);
+      
       scrapingResults.propertiesStored = inserted;
       scrapingResults.propertiesSkipped = skipped;
+    } else {
+      console.log(`⚠️ No properties to store in database`);
     }
 
     scrapingResults.endTime = new Date().toISOString();
     scrapingResults.duration = new Date(scrapingResults.endTime).getTime() - new Date(scrapingResults.startTime).getTime();
 
     // Log success metrics
-    const successMessage = randomMode 
-      ? `Random scraping completed for ${city}${provinceWide ? ' (province-wide)' : ''}: ${scrapingResults.propertiesStored} active properties stored from ${scrapingResults.requestsUsed} diverse page samples`
-      : `Sequential scraping completed for ${city}: ${scrapingResults.propertiesStored} properties stored from ${scrapingResults.requestsUsed} pages`;
+    const successMessage = useRandomMode 
+      ? `Random distance scraping completed for ${city} (province-wide): ${scrapingResults.propertiesStored} active properties stored from ${scrapingResults.requestsUsed} diverse location samples`
+      : `Sequential scraping completed for ${city} (province-wide): ${scrapingResults.propertiesStored} properties stored from ${scrapingResults.requestsUsed} pages`;
     
     console.log(successMessage);
     console.log('Scraping results:', scrapingResults);
