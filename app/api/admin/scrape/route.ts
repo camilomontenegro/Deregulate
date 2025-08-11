@@ -26,22 +26,174 @@ async function getIdealistaToken() {
   return data.access_token;
 }
 
-async function searchPropertiesInCity(city: string, propertyType: string, operation: string, page: number, distance: number, order: string, sort: string) {
+// Generate smart random page sequence that avoids empty pages
+function generateSmartRandomPageSequence(maxRequests: number, totalAvailablePages: number = 0): number[] {
+  const pages = new Set<number>();
+  
+  // Be very conservative with page limits to ensure we get data
+  let safeMaxPage: number;
+  if (totalAvailablePages > 0) {
+    // Use at most 75% of available pages, capped at 15 for safety
+    safeMaxPage = Math.min(Math.ceil(totalAvailablePages * 0.75), 15);
+  } else {
+    // Ultra-conservative when unknown
+    safeMaxPage = 3;
+  }
+  
+  console.log(`Safe page limit set to ${safeMaxPage} (from ${totalAvailablePages} total pages)`);
+  
+  // Always include page 1 as it's most likely to have data
+  pages.add(1);
+  
+  // For remaining requests, be much more conservative
+  while (pages.size < maxRequests && pages.size < safeMaxPage) {
+    let randomPage: number;
+    
+    if (totalAvailablePages === 0) {
+      // Conservative approach when we don't know total pages - stick to first few pages
+      randomPage = Math.floor(Math.random() * 3) + 1; // Pages 1-3 only
+    } else if (pages.size < maxRequests / 2) {
+      // First half of requests: heavily favor early pages (90% from pages 1-5)
+      randomPage = Math.random() < 0.9 
+        ? Math.floor(Math.random() * 5) + 1  // 90% from pages 1-5
+        : Math.floor(Math.random() * Math.min(safeMaxPage, 10)) + 1; // 10% from pages 1-10
+    } else {
+      // Second half: slightly more adventurous but still conservative
+      randomPage = Math.random() < 0.7 
+        ? Math.floor(Math.random() * 8) + 1  // 70% from pages 1-8
+        : Math.floor(Math.random() * safeMaxPage) + 1; // 30% from all available
+    }
+    
+    pages.add(randomPage);
+  }
+  
+  return Array.from(pages).sort((a, b) => a - b);
+}
+
+
+// Province-wide city coordinates for comprehensive coverage
+const provinceCoords: { [key: string]: { main: string; towns: string[] } } = {
+  'Madrid': {
+    main: '40.416775,-3.703790',
+    towns: [
+      '40.416775,-3.703790', // Madrid capital
+      '40.534277,-3.640498', // Alcobendas
+      '40.338056,-3.763889', // Getafe
+      '40.310556,-3.474167', // Valdemoro
+      '40.551111,-3.666944', // San Sebastián de los Reyes
+      '40.455000,-3.833333', // Majadahonda
+      '40.382222,-3.812500', // Fuenlabrada
+      '40.378889,-3.875000', // Móstoles
+      '40.345833,-3.874722', // Alcorcón
+      '40.453333,-3.721944'  // Las Rozas
+    ]
+  },
+  'Barcelona': {
+    main: '41.385064,2.173403',
+    towns: [
+      '41.385064,2.173403', // Barcelona capital
+      '41.533333,2.100000', // Sabadell
+      '41.583333,2.116667', // Terrassa
+      '41.366667,2.250000', // L'Hospitalet de Llobregat
+      '41.366667,2.083333', // Sant Cugat del Vallès
+      '41.433333,2.183333', // Granollers
+      '41.450000,2.100000', // Cerdanyola del Vallès
+      '41.500000,2.200000', // Mollet del Vallès
+      '41.416667,2.216667', // Santa Coloma de Gramenet
+      '41.400000,2.216667'  // Badalona
+    ]
+  },
+  'Sevilla': {
+    main: '37.389092,-5.984459',
+    towns: [
+      '37.389092,-5.984459', // Sevilla capital
+      '37.350000,-5.916667', // Alcalá de Guadaíra
+      '37.416667,-6.000000', // La Rinconada
+      '37.400000,-5.833333', // Carmona
+      '37.266667,-5.916667', // Utrera
+      '37.433333,-5.850000', // Écija
+      '37.183333,-5.783333', // Marchena
+      '37.200000,-6.050000', // Lebrija
+      '37.483333,-5.800000', // Lora del Río
+      '37.300000,-5.783333'  // Morón de la Frontera
+    ]
+  },
+  'Valencia': {
+    main: '39.469907,-0.376288',
+    towns: [
+      '39.469907,-0.376288', // Valencia capital
+      '39.500000,-0.400000', // Sagunto
+      '39.416667,-0.333333', // Torrent
+      '39.433333,-0.400000', // Paterna
+      '39.400000,-0.316667', // Catarroja
+      '39.383333,-0.333333', // Alzira
+      '39.450000,-0.233333', // Xàtiva
+      '39.350000,-0.433333', // Cullera
+      '39.483333,-0.500000', // Canet de Berenguer
+      '39.516667,-0.283333'  // Gandia area
+    ]
+  },
+  'Bilbao': {
+    main: '43.263013,-2.935021',
+    towns: [
+      '43.263013,-2.935021', // Bilbao capital
+      '43.300000,-2.983333', // Getxo
+      '43.333333,-2.966667', // Leioa
+      '43.250000,-2.883333', // Barakaldo
+      '43.233333,-2.916667', // Sestao
+      '43.316667,-2.950000', // Berango
+      '43.283333,-2.800000', // Durango
+      '43.166667,-2.833333', // Galdakao
+      '43.200000,-2.950000', // Basauri
+      '43.350000,-3.000000'  // Sopelana
+    ]
+  },
+  'Málaga': {
+    main: '36.721261,-4.421482',
+    towns: [
+      '36.721261,-4.421482', // Málaga capital
+      '36.683333,-4.566667', // Marbella
+      '36.650000,-4.633333', // Estepona
+      '36.750000,-4.350000', // Vélez-Málaga
+      '36.733333,-4.300000', // Torre del Mar
+      '36.766667,-4.250000', // Nerja
+      '36.816667,-4.816667', // Ronda
+      '36.700000,-4.500000', // Fuengirola
+      '36.683333,-4.483333', // Benalmádena
+      '36.666667,-4.566667'  // Torremolinos
+    ]
+  }
+};
+
+async function searchPropertiesInCity(city: string, propertyType: string, operation: string, page: number, distance: number, order: string, sort: string, randomMode: boolean = false, provinceWide: boolean = false) {
   const token = await getIdealistaToken();
   
-  // Simple geocoding for major Spanish cities
-  const cityCoords: { [key: string]: string } = {
-    'Madrid': '40.416775,-3.703790',
-    'Barcelona': '41.385064,2.173403',
-    'Sevilla': '37.389092,-5.984459',
-    'Valencia': '39.469907,-0.376288',
-    'Bilbao': '43.263013,-2.935021',
-    'Málaga': '36.721261,-4.421482'
-  };
-
-  const center = cityCoords[city];
-  if (!center) {
+  let center: string;
+  
+  if (provinceWide && provinceCoords[city]) {
+    // Select random town from the province for variety
+    const availableLocations = [provinceCoords[city].main, ...provinceCoords[city].towns];
+    center = availableLocations[Math.floor(Math.random() * availableLocations.length)];
+  } else if (provinceCoords[city]) {
+    center = provinceCoords[city].main;
+  } else {
     throw new Error(`Coordinates not found for city: ${city}`);
+  }
+
+  // Apply randomization if enabled
+  let finalOrder = order;
+  let finalSort = sort;
+  let finalDistance = distance;
+  
+  if (randomMode) {
+    // Randomize sort order for variety
+    const orderOptions = ['price', 'publicationDate', 'distance', 'size'];
+    finalOrder = orderOptions[Math.floor(Math.random() * orderOptions.length)];
+    finalSort = Math.random() > 0.5 ? 'asc' : 'desc';
+    
+    // Add slight distance variation (±20%) for geographic diversity
+    const distanceVariation = 0.8 + (Math.random() * 0.4);
+    finalDistance = Math.floor(distance * distanceVariation);
   }
 
   // Correct Idealista API endpoint structure - POST with form data
@@ -49,12 +201,14 @@ async function searchPropertiesInCity(city: string, propertyType: string, operat
     operation,
     propertyType,
     center,
-    distance: distance.toString(),
+    distance: finalDistance.toString(),
     country: 'es',
     maxItems: '50',
     numPage: page.toString(),
-    order,
-    sort
+    order: finalOrder,
+    sort: finalSort,
+    // Add active status filter to ensure we only get active listings
+    state: 'active'
   });
 
   const url = `https://api.idealista.com/3.5/es/search`;
@@ -95,7 +249,9 @@ export async function POST(request: NextRequest) {
       maxRequests = 5,
       distance = 2000,
       order = 'price',
-      sort = 'asc'
+      sort = 'asc',
+      randomMode = false,
+      provinceWide = false
     } = body;
 
     if (!city) {
@@ -166,7 +322,6 @@ export async function POST(request: NextRequest) {
     };
 
     let allProperties: any[] = [];
-    let currentPage = 1;
 
     // Initialize Supabase client with service role for database operations
     const supabase = createClient(
@@ -174,46 +329,105 @@ export async function POST(request: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    while (currentPage <= maxRequests) {
+    // Generate page sequence and get probe results if available
+    console.log(`Generating page sequence for ${city} (Random: ${randomMode}, Province-wide: ${provinceWide})`);
+    
+    let probeResults: any = null;
+    let pagesToScrape: number[];
+    
+    if (randomMode) {
       try {
-        console.log(`Scraping page ${currentPage} for ${city}...`);
+        // Do the probe and get results
+        console.log('Probing first page to understand data availability...');
+        probeResults = await searchPropertiesInCity(
+          city, propertyType, operation, 1, distance, order, sort, false, provinceWide
+        );
         
-        const searchResults = await searchPropertiesInCity(city, propertyType, operation, currentPage, distance, order, sort);
+        const totalPages = probeResults.totalPages || 0;
+        const hasData = probeResults.elementList && probeResults.elementList.length > 0;
+        
+        console.log(`First page probe: ${probeResults.elementList?.length || 0} properties, ${totalPages} total pages`);
+        
+        if (!hasData) {
+          console.log('No data found on first page, using sequential fallback');
+          pagesToScrape = [1];
+        } else {
+          pagesToScrape = generateSmartRandomPageSequence(maxRequests, totalPages);
+          console.log(`Generated smart random sequence based on ${totalPages} available pages`);
+        }
+        
+        scrapingResults.requestsUsed = 1; // Count the probe request
+      } catch (error) {
+        console.error('Error during probe, falling back to conservative sequential:', error);
+        pagesToScrape = Array.from({length: Math.min(maxRequests, 3)}, (_, i) => i + 1);
+        probeResults = null;
+      }
+    } else {
+      pagesToScrape = Array.from({length: maxRequests}, (_, i) => i + 1);
+    }
+    
+    console.log(`${randomMode ? 'Adaptive random' : 'Sequential'} mode: Scraping pages ${pagesToScrape.join(', ')}`);
 
-        scrapingResults.requestsUsed++;
+    for (let i = 0; i < pagesToScrape.length; i++) {
+      const pageNumber = pagesToScrape[i];
+      let searchResults: any;
+      
+      try {
+        // Use cached probe results for page 1 in random mode
+        if (randomMode && pageNumber === 1 && probeResults) {
+          console.log(`Using cached probe results for page 1`);
+          searchResults = probeResults;
+        } else {
+          console.log(`Scraping page ${pageNumber} for ${city} (${i + 1}/${pagesToScrape.length})...`);
+          
+          searchResults = await searchPropertiesInCity(
+            city, 
+            propertyType, 
+            operation, 
+            pageNumber, 
+            distance, 
+            order, 
+            sort, 
+            randomMode, 
+            provinceWide
+          );
+          
+          scrapingResults.requestsUsed++;
+        }
         scrapingResults.propertiesFound += (searchResults.elementList?.length || 0);
 
         scrapingResults.pages.push({
-          page: currentPage,
+          page: pageNumber,
           propertiesCount: searchResults.elementList?.length || 0,
           totalAvailable: searchResults.total || 0
         });
 
         if (!searchResults.elementList || searchResults.elementList.length === 0) {
-          console.log(`No more properties found on page ${currentPage}, stopping...`);
-          break;
+          console.log(`No properties found on page ${pageNumber}, continuing with next page...`);
+          continue;
         }
 
-        allProperties = allProperties.concat(searchResults.elementList);
+        // Filter for active properties only (double-check since API might not enforce it)
+        const activeProperties = searchResults.elementList.filter((property: any) => 
+          !property.status || property.status === 'active' || property.status === 'good'
+        );
 
-        if (currentPage >= (searchResults.totalPages || 1)) {
-          console.log(`Reached last page (${searchResults.totalPages}), stopping...`);
-          break;
-        }
+        console.log(`Found ${activeProperties.length} active properties out of ${searchResults.elementList.length} total on page ${pageNumber}`);
+        allProperties = allProperties.concat(activeProperties);
 
-        currentPage++;
-
-        if (currentPage <= maxRequests) {
+        // Add delay between requests to be respectful to the API
+        if (i < pagesToScrape.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
       } catch (error: any) {
-        console.error(`Error on page ${currentPage}:`, error.message);
+        console.error(`Error on page ${pageNumber}:`, error.message);
         scrapingResults.errors.push({
-          page: currentPage,
+          page: pageNumber,
           error: error.message
         });
-        break;
+        // Continue with other pages instead of breaking completely
+        continue;
       }
     }
 
@@ -276,7 +490,13 @@ export async function POST(request: NextRequest) {
     scrapingResults.endTime = new Date().toISOString();
     scrapingResults.duration = new Date(scrapingResults.endTime).getTime() - new Date(scrapingResults.startTime).getTime();
 
-    console.log('Scraping completed:', scrapingResults);
+    // Log success metrics
+    const successMessage = randomMode 
+      ? `Random scraping completed for ${city}${provinceWide ? ' (province-wide)' : ''}: ${scrapingResults.propertiesStored} active properties stored from ${scrapingResults.requestsUsed} diverse page samples`
+      : `Sequential scraping completed for ${city}: ${scrapingResults.propertiesStored} properties stored from ${scrapingResults.requestsUsed} pages`;
+    
+    console.log(successMessage);
+    console.log('Scraping results:', scrapingResults);
 
     return NextResponse.json({
       success: true,
