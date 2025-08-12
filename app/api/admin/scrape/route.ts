@@ -185,12 +185,11 @@ const provinceCoords: { [key: string]: { main: string; towns: string[] } } = {
 async function searchPropertiesInCity(city: string, propertyType: string, operation: string, page: number, distance: number, order: string, sort: string) {
   const token = await getIdealistaToken();
   
-  // Always use province-wide search for better coverage
+  // Always use the true city center for consistent geographic coverage
   let center: string;
   if (provinceCoords[city]) {
-    // Select random town from the province for variety
-    const availableLocations = [provinceCoords[city].main, ...provinceCoords[city].towns];
-    center = availableLocations[Math.floor(Math.random() * availableLocations.length)];
+    // Use the main city center coordinates for balanced coverage
+    center = provinceCoords[city].main;
   } else {
     throw new Error(`Coordinates not found for city: ${city}`);
   }
@@ -198,8 +197,8 @@ async function searchPropertiesInCity(city: string, propertyType: string, operat
   // Handle random distance option
   let finalDistance = distance;
   if (distance === -1) {
-    // Random distance from 0m (exact center) to 10km (province-wide coverage)
-    finalDistance = Math.floor(Math.random() * 10000);
+    // Random distance from 0m (exact center) to 20km (full metropolitan coverage)
+    finalDistance = Math.floor(Math.random() * 20000);
     console.log(`🎲 Using random distance: ${finalDistance}m from center ${center}`);
   }
   
@@ -216,9 +215,8 @@ async function searchPropertiesInCity(city: string, propertyType: string, operat
     maxItems: '50',
     numPage: page.toString(),
     order: finalOrder,
-    sort: finalSort,
-    // Add active status filter to ensure we only get active listings
-    state: 'active'
+    sort: finalSort
+    // Removed state: 'active' filter as it may be filtering out valid results
   });
 
   const url = `https://api.idealista.com/3.5/es/search`;
@@ -262,6 +260,13 @@ async function searchPropertiesInCity(city: string, propertyType: string, operat
     }
     
     console.log(`✅ Found ${result.elementList?.length || 0} properties on page ${page}`);
+    
+    // Debug: Log municipalities found in this page
+    if (result.elementList && result.elementList.length > 0) {
+      const municipalities = [...new Set(result.elementList.map(p => p.municipality).filter(Boolean))];
+      console.log(`📍 Municipalities found on page ${page}:`, municipalities.join(', '));
+    }
+    
     return result;
     
   } catch (error: any) {
@@ -289,7 +294,7 @@ export async function POST(request: NextRequest) {
       propertyType = 'homes', 
       operation = 'sale', 
       maxRequests = 5,
-      distance = 2000,
+      distance = 20000,
       order = 'price',
       sort = 'asc'
     } = body;
@@ -323,10 +328,10 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Validate distance (500m to 10km or -1 for random)
-    if (distance !== -1 && (distance < 500 || distance > 10000)) {
+    // Validate distance (500m to 20km or -1 for random)
+    if (distance !== -1 && (distance < 500 || distance > 20000)) {
       return NextResponse.json({ 
-        error: 'Distance must be between 500 and 10000 meters, or -1 for random distance' 
+        error: 'Distance must be between 500 and 20000 meters, or -1 for random distance' 
       }, { status: 400 });
     }
 
@@ -535,7 +540,7 @@ export async function POST(request: NextRequest) {
             scraped_at: new Date().toISOString()
           };
 
-          console.log(`💾 Inserting property ${property.propertyCode} - €${property.price?.toLocaleString()}`);
+          console.log(`💾 Inserting property ${property.propertyCode} - €${property.price?.toLocaleString()} in ${property.municipality || city}`);
 
           const { data, error } = await supabase
             .from('houses')

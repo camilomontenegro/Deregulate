@@ -323,7 +323,7 @@ export const useMap = () => {
             .select('*')
             .not('latitude', 'is', null)
             .not('longitude', 'is', null)
-            .limit(1000); // Limit to prevent too many markers
+            .limit(5000); // Limit to prevent too many markers
   
           if (error) {
             console.error('Error fetching properties:', error);
