@@ -1,17 +1,15 @@
-import { Loader } from "@googlemaps/js-api-loader";
-import { MarkerClusterer } from "@googlemaps/markerclusterer";
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import { createClient } from "@supabase/supabase-js";
 import { useEffect, useRef, useState } from "react";
 
-// Singleton loader to prevent multiple API calls
-let mapLoader: Loader | null = null;
-let isLoaderInitialized = false;
 const majorCities = [
   { name: 'Madrid', lat: 40.4168, lng: -3.7038 },
   { name: 'Barcelona', lat: 41.3851, lng: 2.1734 },
   { name: 'Seville', lat: 37.3891, lng: -5.9845 }
 ];
 
+const MAPTILER_API_KEY = 'z3OfJgO4Nbj34x56NGlf';
 
 interface Property {
   id: number;
@@ -31,271 +29,64 @@ interface Property {
   url: string;
 }
 
-const getMapLoader = (apiKey: string) => {
-  if (!mapLoader && !isLoaderInitialized) {
-    isLoaderInitialized = true;
-    mapLoader = new Loader({
-      apiKey: apiKey,
-      version: 'weekly',
-      libraries: ['maps', 'marker', 'visualization'],
-      // Reduce data loading
-      region: 'ES',
-      language: 'es'
-    });
-  }
-  return mapLoader;
-};
-
-
 export const useMap = () => {
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<google.maps.Map | null>(null);
-  const clustererRef = useRef<MarkerClusterer | null>(null);
-  const markersRef = useRef<google.maps.Marker[]>([]);
+  const mapInstanceRef = useRef<maplibregl.Map | null>(null);
+  const clustererRef = useRef<any>(null);
+  const markersRef = useRef<maplibregl.Marker[]>([]);
+  const popupRef = useRef<maplibregl.Popup | null>(null);
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [isClient, setIsClient] = useState(false);
-  const [heatmapRef, setHeatMapRef] = useState<google.maps.visualization.HeatmapLayer>();
+  const [heatmapRef, setHeatMapRef] = useState<any>();
+  const [totalPropertiesCount, setTotalPropertiesCount] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [currentChunk, setCurrentChunk] = useState(0);
+  const [allChunksLoaded, setAllChunksLoaded] = useState(false);
+  const CHUNK_SIZE = 1000;
 
   useEffect(() => {
     const initializeMap = async () => {
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-      
-      if (!apiKey || !mapRef.current) return;
+      if (!mapRef.current) return;
 
       try {
-        const loader = getMapLoader(apiKey);
-        if (!loader) return;
-
-        const [{ Map }] = await Promise.all([
-          loader.importLibrary('maps')
-        ]);
-
-        const { HeatmapLayer } = await loader.importLibrary('visualization');
-
-        // Double-check mapRef is still valid after async operations
-        if (!mapRef.current) return;
-        const map = new Map(mapRef.current, {
-          center: { lat: 40.4168, lng: -3.7038 },
+        // Create MapLibre map with MapTiler style
+        const map = new maplibregl.Map({
+          container: mapRef.current,
+          style: `https://api.maptiler.com/maps/streets/style.json?key=${MAPTILER_API_KEY}`,
+          center: [-3.7038, 40.4168], // lng, lat format for MapLibre
           zoom: 6,
-          restriction: {
-            latLngBounds: {
-              north: 43.9,
-              south: 35.9,
-              west: -9.5,
-              east: 4.5,
-            },
-          },
-          mapTypeId: 'roadmap',
-          disableDefaultUI: true,
-          zoomControl: true,
-          gestureHandling: 'cooperative',
-          // Disable features that load additional data
-          clickableIcons: false,
-          keyboardShortcuts: false,
-          // Disable POI and transit
-          disableDoubleClickZoom: false,
-          scrollwheel: true
-        });
-
-        // Apply styles after map creation to override defaults
-        map.setOptions({
-          styles: [
-            // Hide ALL POI labels
-            {
-              featureType: 'poi',
-              elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
-            },
-            // Hide ALL POI icons
-            {
-              featureType: 'poi',
-              elementType: 'labels.icon',
-              stylers: [{ visibility: 'off' }]
-            },
-            // Hide transit completely
-            {
-              featureType: 'transit',
-              stylers: [{ visibility: 'off' }]
-            },
-            // Hide road labels but keep roads
-            {
-              featureType: 'road',
-              elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
-            },
-            // Keep only administrative labels (cities, towns)
-            {
-              featureType: 'administrative',
-              elementType: 'labels',
-              stylers: [{ visibility: 'on' }]
-            }
-          ]
+          maxBounds: [[-9.5, 35.9], [4.5, 43.9]], // Spain bounds [west, south, east, north]
         });
 
         // Store map instance for heatmap updates
         mapInstanceRef.current = map;
 
-        // Calculate price statistics from existing Supabase data for proper comparison
-        const validProperties = properties.filter(property => 
-          property.latitude && property.longitude && property.price > 0
-        );
-        
-        if (validProperties.length === 0) return;
-        
-        const prices = validProperties.map(property => property.price);
-        const avgPrice = prices.reduce((sum, price) => sum + price, 0) / prices.length;
-        const minPrice = Math.min(...prices);
-        const maxPrice = Math.max(...prices);
-        
-        console.log(`Price stats - Min: €${minPrice}, Avg: €${avgPrice.toFixed(0)}, Max: €${maxPrice}`);
-
-        // Create heatmap data points based on price comparison to average
-        const heatmapData = validProperties.map(property => {
-          // Calculate how much above/below average this property is
-          const priceRatio = property.price / avgPrice;
-          
-          // Create weight based on price relative to average
-          let weight;
-          if (priceRatio >= 2.0) {
-            weight = 10; // Very expensive (2x+ average) = hot red
-          } else if (priceRatio >= 1.5) {
-            weight = 7; // Expensive (1.5x+ average) = orange
-          } else if (priceRatio >= 1.2) {
-            weight = 5; // Above average (1.2x+ average) = yellow
-          } else if (priceRatio >= 0.8) {
-            weight = 3; // Around average (0.8-1.2x average) = green
-          } else if (priceRatio >= 0.5) {
-            weight = 1; // Below average (0.5-0.8x average) = cyan
-          } else {
-            weight = 0.1; // Very cheap (<0.5x average) = blue/transparent
-          }
-          
-          return {
-            location: new google.maps.LatLng(property.latitude, property.longitude),
-            weight: weight
-          };
-        });
-
-        // Create heatmap layer with settings optimized for granular data
-        const heatmap = new HeatmapLayer({
-          data: heatmapData,
-          map: null, // Initially not shown
-          radius: 25, // Reduced radius to prevent oversized blobs
-          opacity: 0.5, // Lower opacity for better visibility of overlaps
-          maxIntensity: 3, // Lower max intensity to prevent oversaturation
-          dissipating: true, // Enable dissipation for smoother gradients
-          gradient: [
-            'rgba(0, 0, 255, 0)', // Transparent blue (no data)
-            'rgba(0, 0, 255, 0.3)', // Light blue (low density)
-            'rgba(0, 255, 255, 0.5)', // Cyan (low-medium density)
-            'rgba(0, 255, 0, 0.7)', // Green (medium density)
-            'rgba(255, 255, 0, 0.8)', // Yellow (medium-high density)
-            'rgba(255, 165, 0, 0.9)', // Orange (high density)
-            'rgba(255, 0, 0, 1)' // Red (highest density)
-          ]
-        });
-
-        /* heatmapRef.current = heatmap; */
-        setHeatMapRef(heatmap);
-
-        // Add city markers using regular markers
-        majorCities.forEach(city => {
-          new google.maps.Marker({
-            map,
-            position: { lat: city.lat, lng: city.lng },
-            title: city.name,
-            icon: {
-              path: google.maps.SymbolPath.CIRCLE,
-              scale: 8,
-              fillColor: '#1f2937',
-              fillOpacity: 1,
-              strokeColor: '#ffffff',
-              strokeWeight: 2
-            }
+        // Wait for map to load before adding layers
+        map.on('load', () => {
+          // Add city markers
+          majorCities.forEach(city => {
+            new maplibregl.Marker({
+              color: '#1f2937',
+              scale: 0.8
+            })
+              .setLngLat([city.lng, city.lat])
+              .setPopup(new maplibregl.Popup({ offset: 25 })
+                .setHTML(`<h3>${city.name}</h3>`))
+              .addTo(map);
           });
-        });
 
-        // Create property markers but don't add them to map initially
-        const allMarkers: google.maps.Marker[] = [];
-        properties.forEach(property => {
-          if (property.latitude && property.longitude) {
-            // Different colors for sale vs rent
-            const pinColor = property.operation === 'sale' ? '#ef4444' : '#10b981';
-            
-            const marker = new google.maps.Marker({
-              map: null, // Initially not on map
-              position: { lat: property.latitude, lng: property.longitude },
-              title: `${property.address} - €${property.price.toLocaleString()}`,
-              icon: {
-                path: google.maps.SymbolPath.CIRCLE,
-                scale: 6,
-                fillColor: pinColor,
-                fillOpacity: 1,
-                strokeColor: '#ffffff',
-                strokeWeight: 1
-              }
-            });
+          // Create empty heatmap ref for later use
+          setHeatMapRef({ map, layerId: 'property-heatmap' });
 
-            // Create info window content
-            const infoContent = `
-              <div style="padding: 10px; max-width: 300px;">
-                <h3 style="margin: 0 0 8px 0; font-size: 16px; font-weight: bold;">
-                  €${property.price.toLocaleString()} - ${property.operation === 'sale' ? 'Sale' : 'Rent'}
-                </h3>
-                <p style="margin: 0 0 4px 0; color: #666; font-size: 14px;">
-                  ${property.address}
-                </p>
-                <p style="margin: 0 0 4px 0; color: #666; font-size: 12px;">
-                  ${property.municipality}, ${property.district}
-                </p>
-                <div style="display: flex; gap: 12px; margin: 8px 0; font-size: 12px;">
-                  ${property.size ? `<span>📐 ${property.size}m²</span>` : ''}
-                  ${property.rooms ? `<span>🛏️ ${property.rooms} rooms</span>` : ''}
-                  ${property.bathrooms ? `<span>🚿 ${property.bathrooms} baths</span>` : ''}
-                </div>
-                <p style="margin: 4px 0 0 0; font-size: 11px; color: #888;">
-                  Type: ${property.property_type} • ID: ${property.property_code}
-                </p>
-              </div>
-            `;
-
-            const infoWindow = new google.maps.InfoWindow({
-              content: infoContent
-            });
-
-            marker.addListener('click', () => {
-              infoWindow.open(map, marker);
-            });
-
-            allMarkers.push(marker);
-          }
-        });
-
-        // Store markers in ref for toggling
-        markersRef.current = allMarkers;
-
-        // Initialize marker clusterer but don't show markers initially
-        clustererRef.current = new MarkerClusterer({
-          map: null, // Initially not on map
-          markers: allMarkers,
-          gridSize: 60,
-          maxZoom: 15,
-          minimumClusterSize: 2,
-          styles: [
-            {
-              textColor: 'white',
-              textSize: 12,
-              height: 40,
-              width: 40,
-              backgroundPosition: 'center',
-              iconAnchor: [20, 20],
-              textAlign: 'center',
-              fontFamily: 'Arial, sans-serif',
-              fontWeight: 'bold',
-              backgroundSize: 'contain'
-            }
-          ]
+          // Initialize clustering data structures
+          clustererRef.current = {
+            map,
+            sourceId: 'properties-source',
+            clusterLayerId: 'clusters',
+            unclusteredLayerId: 'unclustered-points',
+            clusterCountLayerId: 'cluster-count'
+          };
         });
 
       } catch (error) {
@@ -303,49 +94,332 @@ export const useMap = () => {
       }
     };
 
-    // Only initialize once when we have properties and loading is complete and we're on client
-    if (!loading && properties.length > 0 && !mapInstanceRef.current && isClient) {
+    // Only initialize once when we're on client and we have the map ref
+    if (!mapInstanceRef.current && isClient && mapRef.current) {
       initializeMap();
     }
-  }, [properties, loading, isClient]);
+  }, [isClient]);
+
+  // Function to load next chunk of properties
+  const loadNextChunk = async () => {
+    if (allChunksLoaded || loadingMore) return;
+    
+    try {
+      setLoadingMore(true);
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+      );
+
+      const nextChunk = currentChunk + 1;
+      const startIndex = nextChunk * CHUNK_SIZE;
+      const endIndex = startIndex + CHUNK_SIZE - 1;
+      
+      console.log(`Loading chunk ${nextChunk}: properties ${startIndex}-${endIndex}`);
+      
+      const { data, error } = await supabase
+        .from('houses')
+        .select('*')
+        .not('latitude', 'is', null)
+        .not('longitude', 'is', null)
+        .range(startIndex, endIndex);
+
+      if (error) {
+        console.error('Error fetching chunk:', error);
+        return;
+      }
+
+      const newProperties = data || [];
+      console.log(`Loaded chunk ${nextChunk}: ${newProperties.length} properties`);
+      
+      if (newProperties.length > 0) {
+        setProperties(prev => [...prev, ...newProperties]);
+        setCurrentChunk(nextChunk);
+      }
+      
+      // Mark as complete if we got less than full chunk
+      if (newProperties.length < CHUNK_SIZE) {
+        setAllChunksLoaded(true);
+        console.log('All chunks loaded!');
+      }
+      
+    } catch (error) {
+      console.error('Error loading chunk:', error);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  // Function to load first chunk and get total count
+  const loadInitialChunk = async () => {
+    try {
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+      );
+
+      // Get total count
+      const { count: totalCount } = await supabase
+        .from('houses')
+        .select('*', { count: 'exact', head: true })
+        .not('latitude', 'is', null)
+        .not('longitude', 'is', null);
+
+      setTotalPropertiesCount(totalCount || 0);
+      console.log('Total properties with coordinates:', totalCount);
+
+      // Load first chunk (0-999)
+      const { data, error } = await supabase
+        .from('houses')
+        .select('*')
+        .not('latitude', 'is', null)
+        .not('longitude', 'is', null)
+        .range(0, CHUNK_SIZE - 1);
+
+      if (error) {
+        console.error('Error fetching first chunk:', error);
+      } else {
+        console.log(`Loaded first chunk: ${data?.length || 0} properties`);
+        setProperties(data || []);
+        setCurrentChunk(0);
+        
+        // If we got less than full chunk, we have all data
+        if ((data?.length || 0) < CHUNK_SIZE) {
+          setAllChunksLoaded(true);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading initial chunk:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-      setIsClient(true);
-      const fetchProperties = async () => {
-        try {
-          const supabase = createClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-          );
-  
-          const { data, error } = await supabase
-            .from('houses')
-            .select('*')
-            .not('latitude', 'is', null)
-            .not('longitude', 'is', null)
-            .limit(5000); // Limit to prevent too many markers
-  
-          if (error) {
-            console.error('Error fetching properties:', error);
-          } else {
-            setProperties(data || []);
-          }
-        } catch (error) {
-          console.error('Error:', error);
-        } finally {
-          setLoading(false);
+    setIsClient(true);
+    loadInitialChunk();
+  }, []);
+
+  // Set up smart loading trigger when map is ready
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || loading || allChunksLoaded) return;
+
+    let interactionTimeout: NodeJS.Timeout;
+    
+    const handleMapInteraction = () => {
+      clearTimeout(interactionTimeout);
+      
+      // After user stops interacting for 2 seconds, check if we need more data
+      interactionTimeout = setTimeout(() => {
+        const zoom = map.getZoom();
+        
+        // Only trigger loading when zoomed in to city level or closer
+        if (zoom > 9 && !allChunksLoaded && !loadingMore) {
+          // Simple trigger: load next chunk when user is exploring at city level
+          console.log('User exploring at zoom', zoom, '- loading next chunk');
+          loadNextChunk();
         }
-      };
-  
-      fetchProperties();
-    }, []);
+      }, 2000); // Wait 2 seconds after user stops moving
+    };
+    
+    map.on('moveend', handleMapInteraction);
+    map.on('zoomend', handleMapInteraction);
+    
+    return () => {
+      clearTimeout(interactionTimeout);
+      map.off('moveend', handleMapInteraction);
+      map.off('zoomend', handleMapInteraction);
+    };
+  }, [loading, isClient, allChunksLoaded, loadingMore]);
+
+  // Function to create GeoJSON from properties
+  const createGeoJSONData = (properties: Property[]) => {
+    return {
+      type: 'FeatureCollection' as const,
+      features: properties
+        .filter(property => property.latitude && property.longitude)
+        .map(property => ({
+          type: 'Feature' as const,
+          properties: {
+            ...property,
+            color: property.operation === 'sale' ? '#ef4444' : '#10b981'
+          },
+          geometry: {
+            type: 'Point' as const,
+            coordinates: [property.longitude, property.latitude]
+          }
+        }))
+    };
+  };
+
   // Function to toggle markers
   const toggleMarkers = (enabled: boolean) => {
-    if (clustererRef.current && mapInstanceRef.current) {
-      if (enabled) {
-        clustererRef.current.setMap(mapInstanceRef.current);
-      } else {
-        clustererRef.current.setMap(null);
+    const map = mapInstanceRef.current;
+    if (!map || !clustererRef.current) return;
+
+    const { sourceId, clusterLayerId, unclusteredLayerId, clusterCountLayerId } = clustererRef.current;
+
+    if (enabled) {
+      // Add source if it doesn't exist
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, {
+          type: 'geojson',
+          data: createGeoJSONData(properties),
+          cluster: true,
+          clusterMaxZoom: 14,
+          clusterRadius: 60
+        });
+
+        // Add cluster layer
+        map.addLayer({
+          id: clusterLayerId,
+          type: 'circle',
+          source: sourceId,
+          filter: ['has', 'point_count'],
+          paint: {
+            'circle-color': [
+              'step',
+              ['get', 'point_count'],
+              '#51bbd6',
+              100,
+              '#f1c40f',
+              750,
+              '#e74c3c'
+            ],
+            'circle-radius': [
+              'step',
+              ['get', 'point_count'],
+              20,
+              100,
+              30,
+              750,
+              40
+            ]
+          }
+        });
+
+        // Add cluster count layer
+        map.addLayer({
+          id: clusterCountLayerId,
+          type: 'symbol',
+          source: sourceId,
+          filter: ['has', 'point_count'],
+          layout: {
+            'text-field': '{point_count_abbreviated}',
+            'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
+            'text-size': 12
+          },
+          paint: {
+            'text-color': '#ffffff'
+          }
+        });
+
+        // Add unclustered points layer
+        map.addLayer({
+          id: unclusteredLayerId,
+          type: 'circle',
+          source: sourceId,
+          filter: ['!', ['has', 'point_count']],
+          paint: {
+            'circle-color': ['get', 'color'],
+            'circle-radius': 6,
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#ffffff'
+          }
+        });
+
+        // Add click handlers
+        map.on('click', clusterLayerId, (e) => {
+          const features = map.queryRenderedFeatures(e.point, {
+            layers: [clusterLayerId]
+          });
+          const clusterId = features[0].properties!.cluster_id;
+          const source = map.getSource(sourceId) as maplibregl.GeoJSONSource;
+          
+          source.getClusterExpansionZoom(clusterId).then((zoom: number) => {
+            const coordinates = (features[0].geometry as any).coordinates as [number, number];
+            map.easeTo({
+              center: coordinates,
+              zoom: zoom
+            });
+          }).catch((err) => {
+            console.error('Error getting cluster expansion zoom:', err);
+          });
+        });
+
+        // Add click handler for individual points
+        map.on('click', unclusteredLayerId, (e) => {
+          if (!e.features || e.features.length === 0) return;
+          
+          const coordinates = (e.features[0].geometry as any).coordinates.slice() as [number, number];
+          const properties = e.features[0].properties!;
+
+          // Ensure that if the map is zoomed out such that multiple
+          // copies of the feature are visible, the popup appears
+          // over the copy being pointed to.
+          while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+            coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+          }
+
+          // Close existing popup
+          if (popupRef.current) {
+            popupRef.current.remove();
+          }
+
+          const popupContent = `
+            <div style="padding: 10px; max-width: 300px;">
+              <h3 style="margin: 0 0 8px 0; font-size: 16px; font-weight: bold;">
+                €${parseInt(properties.price).toLocaleString()} - ${properties.operation === 'sale' ? 'Sale' : 'Rent'}
+              </h3>
+              <p style="margin: 0 0 4px 0; color: #666; font-size: 14px;">
+                ${properties.address}
+              </p>
+              <p style="margin: 0 0 4px 0; color: #666; font-size: 12px;">
+                ${properties.municipality}, ${properties.district}
+              </p>
+              <div style="display: flex; gap: 12px; margin: 8px 0; font-size: 12px;">
+                ${properties.size ? `<span>📐 ${properties.size}m²</span>` : ''}
+                ${properties.rooms ? `<span>🛏️ ${properties.rooms} rooms</span>` : ''}
+                ${properties.bathrooms ? `<span>🚿 ${properties.bathrooms} baths</span>` : ''}
+              </div>
+              <p style="margin: 4px 0 0 0; font-size: 11px; color: #888;">
+                Type: ${properties.property_type} • ID: ${properties.property_code}
+              </p>
+            </div>
+          `;
+
+          popupRef.current = new maplibregl.Popup()
+            .setLngLat(coordinates)
+            .setHTML(popupContent)
+            .addTo(map);
+        });
+
+        // Change cursor on hover
+        map.on('mouseenter', clusterLayerId, () => {
+          map.getCanvas().style.cursor = 'pointer';
+        });
+        map.on('mouseleave', clusterLayerId, () => {
+          map.getCanvas().style.cursor = '';
+        });
+        map.on('mouseenter', unclusteredLayerId, () => {
+          map.getCanvas().style.cursor = 'pointer';
+        });
+        map.on('mouseleave', unclusteredLayerId, () => {
+          map.getCanvas().style.cursor = '';
+        });
+      }
+    } else {
+      // Remove layers
+      if (map.getLayer(clusterLayerId)) map.removeLayer(clusterLayerId);
+      if (map.getLayer(clusterCountLayerId)) map.removeLayer(clusterCountLayerId);
+      if (map.getLayer(unclusteredLayerId)) map.removeLayer(unclusteredLayerId);
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+      
+      // Remove popup
+      if (popupRef.current) {
+        popupRef.current.remove();
+        popupRef.current = null;
       }
     }
   };
@@ -358,6 +432,10 @@ export const useMap = () => {
     properties,
     setIsClient,
     heatmapRef,
-    toggleMarkers
+    toggleMarkers,
+    totalPropertiesCount,
+    loadingMore,
+    allChunksLoaded,
+    loadNextChunk
   }
 }

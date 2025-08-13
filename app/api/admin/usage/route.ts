@@ -17,11 +17,17 @@ export async function GET() {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
 
-    // Get database stats
+    // Get database stats - get total count first
+    const { count: totalCount, error: countError } = await supabase
+      .from('houses')
+      .select('*', { count: 'exact', head: true });
+
+    // Get all records for detailed stats (remove default 1000 limit)
     const { data: houses, error } = await supabase
       .from('houses')
       .select('operation, property_type, municipality')
-      .order('scraped_at', { ascending: false });
+      .order('scraped_at', { ascending: false })
+      .limit(50000); // Set a high limit to get all records
 
     let databaseStats = {
       total: 0,
@@ -30,8 +36,11 @@ export async function GET() {
       byMunicipality: {} as Record<string, number>
     };
 
+    if (!countError && totalCount !== null) {
+      databaseStats.total = totalCount;
+    }
+
     if (!error && houses) {
-      databaseStats.total = houses.length;
       
       houses.forEach((house: any) => {
         // Count by operation

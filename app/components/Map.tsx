@@ -1,19 +1,19 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Loader } from '@googlemaps/js-api-loader';
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import { createClient } from '@supabase/supabase-js';
 import LayerControlPanel from './LayerControlPanel';
 import { useHeatMap } from './hooks/useHeatMap';
 import { useMap } from './hooks/useMap';
-/// <reference types="@types/google.maps" />
 
 
 
 
 
 const Map = () => {
-  const {mapRef, mapInstanceRef, properties, isClient, loading, heatmapRef, toggleMarkers} = useMap();
+  const {mapRef, mapInstanceRef, properties, isClient, loading, heatmapRef, toggleMarkers, totalPropertiesCount, loadingMore, allChunksLoaded, loadNextChunk} = useMap();
   const {heatmapEnabled, setHeatmapEnabled, heatmapRef: heatmapRef2} = useHeatMap({mapInstanceRef, ref: heatmapRef});
   const [markersEnabled, setMarkersEnabled] = useState(false);
   const [heatmapSettings, setHeatmapSettings] = useState({
@@ -187,6 +187,12 @@ const Map = () => {
 
   // Update heatmap data when properties change - using existing Supabase data only
   useEffect(() => {
+    console.log('Heatmap useEffect triggered:', { 
+      hasHeatmapRef: !!heatmapRef2.current, 
+      propertiesCount: properties.length, 
+      heatmapEnabled 
+    });
+    
     if (heatmapRef2.current && properties.length > 0) {
       const validProperties = properties.filter(property => 
         property.latitude && property.longitude && property.price > 0
@@ -233,44 +239,142 @@ const Map = () => {
         ).join(', '));
       }
 
-      const heatmapData = validProperties.map(property => {
-        const weight = calculateWeight(property, scalingReference, avgPricePerM2, heatmapSettings.weightMode, heatmapSettings.scalingMode, cityMedians, pricePerM2Range);
-        
-        return {
-          location: new google.maps.LatLng(property.latitude, property.longitude),
-          weight: weight
-        };
-      });
-
-      heatmapRef2.current.setData(heatmapData);
-      
-      // Define gradient based on scaling mode - add pink for minMax ultra-premium
-      const heatmapGradient = heatmapSettings.scalingMode === 'minMax' 
-        ? [
-            'rgba(0, 0, 255, 0)',         // Transparent blue (no data)
-            'rgba(0, 0, 255, 0.3)',       // Light blue (cheapest)
-            'rgba(0, 255, 255, 0.5)',     // Cyan (below average)
-            'rgba(0, 255, 0, 0.7)',       // Green (average)
-            'rgba(255, 255, 0, 0.8)',     // Yellow (above average)
-            'rgba(255, 0, 0, 0.9)',       // Red (expensive)
-            'rgba(255, 20, 147, 1)'       // Pink (ultra-premium top 10%)
-          ]
-        : undefined; // Use default gradient for other modes
-
-      // Update heatmap settings including gradient for minMax mode
-      const heatmapOptions: any = {
-        radius: heatmapSettings.radius,
-        opacity: heatmapSettings.opacity,
-        maxIntensity: heatmapSettings.maxIntensity
+      // Create GeoJSON data for heatmap
+      const heatmapGeoJSON = {
+        type: 'FeatureCollection' as const,
+        features: validProperties.map(property => {
+          const weight = calculateWeight(property, scalingReference, avgPricePerM2, heatmapSettings.weightMode, heatmapSettings.scalingMode, cityMedians, pricePerM2Range);
+          
+          return {
+            type: 'Feature' as const,
+            properties: {
+              weight: weight
+            },
+            geometry: {
+              type: 'Point' as const,
+              coordinates: [property.longitude, property.latitude]
+            }
+          };
+        })
       };
 
-      if (heatmapGradient) {
-        heatmapOptions.gradient = heatmapGradient;
-      }
+      // Update or create heatmap layer
+      const map = heatmapRef2.current.map;
+      const layerId = heatmapRef2.current.layerId;
+      const sourceId = 'heatmap-source';
 
-      heatmapRef2.current.setOptions(heatmapOptions);
+      if (map.getSource(sourceId)) {
+        // Update existing source
+        (map.getSource(sourceId) as maplibregl.GeoJSONSource).setData(heatmapGeoJSON);
+      } else {
+        // Add source
+        map.addSource(sourceId, {
+          type: 'geojson',
+          data: heatmapGeoJSON
+        });
+
+        // Add heatmap layer
+        console.log('Creating heatmap layer:', layerId);
+        map.addLayer({
+          id: layerId,
+          type: 'heatmap',
+          source: sourceId,
+          layout: {
+            visibility: heatmapEnabled ? 'visible' : 'none'
+          },
+          paint: {
+            // Use the weight property from our data
+            'heatmap-weight': ['get', 'weight'],
+            // Increase the heatmap color weight weight by zoom level
+            'heatmap-intensity': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              0, 1,
+              9, 3
+            ],
+            // Color ramp for heatmap  
+            'heatmap-color': [
+              'interpolate',
+              ['linear'],
+              ['heatmap-density'],
+              0, 'rgba(0, 0, 255, 0)',         // Transparent blue (no data)
+              0.2, 'rgba(0, 0, 255, 0.3)',     // Light blue (cheapest)
+              0.4, 'rgba(0, 255, 255, 0.5)',   // Cyan (below average)
+              0.5, 'rgba(0, 255, 0, 0.7)',     // Green (average)
+              0.6, 'rgba(255, 255, 0, 0.8)',   // Yellow (above average)
+              0.8, 'rgba(255, 0, 0, 0.9)',     // Red (expensive)
+              1, 'rgba(255, 20, 147, 1)'       // Pink (ultra-premium top 1%)
+            ],
+            // Adjust the heatmap radius by zoom level
+            'heatmap-radius': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              0, 2,
+              9, heatmapSettings.radius
+            ],
+            // Transition from heatmap to circle layer by zoom level
+            'heatmap-opacity': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              7, heatmapSettings.opacity,
+              9, heatmapSettings.opacity * 0.5
+            ]
+          }
+        });
+        console.log('Heatmap layer created successfully:', layerId, 'Visible:', heatmapEnabled);
+      }
+      
+      // Update heatmap paint properties
+      if (map.getLayer(layerId)) {
+        map.setPaintProperty(layerId, 'heatmap-radius', [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          0, 2,
+          9, heatmapSettings.radius
+        ]);
+        
+        map.setPaintProperty(layerId, 'heatmap-opacity', [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          7, heatmapSettings.opacity,
+          9, heatmapSettings.opacity * 0.5
+        ]);
+
+        // Update color gradient based on scaling mode
+        const colorGradient = heatmapSettings.scalingMode === 'minMax' 
+          ? [
+              'interpolate',
+              ['linear'],
+              ['heatmap-density'],
+              0, 'rgba(0, 0, 255, 0)',         // Transparent blue (no data)
+              0.2, 'rgba(0, 0, 255, 0.3)',     // Light blue (cheapest)
+              0.4, 'rgba(0, 255, 255, 0.5)',   // Cyan (below average)
+              0.5, 'rgba(0, 255, 0, 0.7)',     // Green (average)
+              0.6, 'rgba(255, 255, 0, 0.8)',   // Yellow (above average)
+              0.8, 'rgba(255, 0, 0, 0.9)',     // Red (expensive)
+              1, 'rgba(255, 20, 147, 1)'       // Pink (ultra-premium top 1%)
+            ]
+          : [
+              'interpolate',
+              ['linear'],
+              ['heatmap-density'],
+              0, 'rgba(0, 0, 255, 0)',
+              0.2, 'rgba(0, 0, 255, 0.3)',
+              0.4, 'rgba(0, 255, 255, 0.5)',
+              0.6, 'rgba(0, 255, 0, 0.7)',
+              0.8, 'rgba(255, 255, 0, 0.8)',
+              1, 'rgba(255, 0, 0, 1)'
+            ];
+
+        map.setPaintProperty(layerId, 'heatmap-color', colorGradient);
+      }
     }
-  }, [properties, heatmapSettings]);
+  }, [properties, heatmapSettings, heatmapEnabled]);
 
   const handleHeatmapToggle = (enabled: boolean) => {
     setHeatmapEnabled(enabled);
@@ -307,6 +411,29 @@ const Map = () => {
         </div>
       )}
       
+      {/* Dynamic Loading Indicator */}
+      {loadingMore && (
+        <div className="absolute top-16 left-4 bg-blue-50 px-3 py-2 rounded-lg shadow-lg z-10 border border-blue-200">
+          <div className="flex items-center gap-2">
+            <div className="animate-spin h-3 w-3 border-2 border-blue-400 border-t-transparent rounded-full"></div>
+            <span className="text-xs text-blue-700">Loading more properties...</span>
+          </div>
+        </div>
+      )}
+      
+      {/* Load More Button */}
+      {!loading && !allChunksLoaded && !loadingMore && properties.length > 500 && (
+        <div className="absolute top-16 right-4 z-10">
+          <button
+            onClick={loadNextChunk}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow-lg text-sm font-medium transition-colors"
+          >
+            Load More Properties
+            <span className="ml-2 text-blue-200">({properties.length} of {totalPropertiesCount})</span>
+          </button>
+        </div>
+      )}
+      
       {/* Property Legend */}
       {!loading && properties.length > 0 && markersEnabled && !heatmapEnabled && (
         <div className="absolute top-4 left-4 bg-white px-3 py-2 rounded-lg shadow-lg z-10">
@@ -319,7 +446,7 @@ const Map = () => {
               <div className="w-3 h-3 bg-green-500 rounded-full"></div>
               <span>Rent</span>
             </div>
-            <span className="text-gray-600">• {properties.length} properties</span>
+            <span className="text-gray-600">• {properties.length}{totalPropertiesCount ? ` of ${totalPropertiesCount}` : ''} properties</span>
           </div>
         </div>
       )}
