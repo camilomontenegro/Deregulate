@@ -224,6 +224,43 @@ class SupabaseClient {
     return typeMap[idealistaType] || idealistaType;
   }
 
+  async getExistingPropertyCodes() {
+    try {
+      const { data, error } = await this.client
+        .from(this.tableName)
+        .select('property_code')
+        .not('property_code', 'is', null);
+      
+      if (error) throw error;
+      
+      return new Set(data.map(row => row.property_code));
+    } catch (error) {
+      console.error('Error fetching existing property codes:', error);
+      throw error;
+    }
+  }
+
+  async getNewPropertyCodes(propertyCodes) {
+    try {
+      const { data, error } = await this.client
+        .rpc('get_new_property_codes', { 
+          property_codes: propertyCodes 
+        });
+      
+      if (error) throw error;
+      return data.map(row => row.property_code);
+    } catch (error) {
+      console.error('Error checking new property codes:', error);
+      // Fallback to Set-based filtering if RPC fails
+      const existingCodes = await this.getExistingPropertyCodes();
+      return propertyCodes.filter(code => !existingCodes.has(code));
+    }
+  }
+
+  filterNewProperties(properties, existingCodes) {
+    return properties.filter(property => !existingCodes.has(property.propertyCode));
+  }
+
   async testConnection() {
     try {
       const { data, error } = await this.client

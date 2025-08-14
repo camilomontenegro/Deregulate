@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import supabaseClient from '../../../lib/supabase/client';
 
 export async function GET() {
   return NextResponse.json({ message: 'Scrape API endpoint is working' });
@@ -489,10 +490,35 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Store properties in Supabase
-    console.log(`💾 Starting database insertion for ${allProperties.length} properties...`);
+    // Filter out existing properties before database insertion
+    console.log(`🔍 Filtering ${allProperties.length} properties to remove duplicates...`);
     
+    let newProperties = allProperties;
     if (allProperties.length > 0) {
+      try {
+        // Get existing property codes from database
+        const existingCodes = await supabaseClient.getExistingPropertyCodes();
+        console.log(`📋 Found ${existingCodes.size} existing properties in database`);
+        
+        // Filter out properties that already exist
+        newProperties = supabaseClient.filterNewProperties(allProperties, existingCodes);
+        
+        console.log(`✨ After filtering: ${newProperties.length} new properties (${allProperties.length - newProperties.length} duplicates removed)`);
+        
+        // Update results with filtering info
+        scrapingResults.propertiesSkipped = allProperties.length - newProperties.length;
+        
+      } catch (error) {
+        console.error('Error filtering properties, proceeding without filtering:', error);
+        // Continue with all properties if filtering fails
+        newProperties = allProperties;
+      }
+    }
+
+    // Store properties in Supabase
+    console.log(`💾 Starting database insertion for ${newProperties.length} new properties...`);
+    
+    if (newProperties.length > 0) {
       let inserted = 0;
       let skipped = 0;
       let dbErrors = 0;
@@ -502,7 +528,7 @@ export async function POST(request: NextRequest) {
         throw new Error('Supabase client not initialized - check environment variables');
       }
       
-      for (const property of allProperties) {
+      for (const property of newProperties) {
         try {
           // Validate required property data
           if (!property.propertyCode) {
@@ -548,8 +574,8 @@ export async function POST(request: NextRequest) {
             .select();
 
           if (error) {
-            if (error.code === '23505') { // Unique constraint violation
-              console.log(`⏭️ Property ${property.propertyCode} already exists, skipping`);
+            if (error.code === '23505') { // Unique constraint violation - should be rare now with pre-filtering
+              console.log(`⏭️ Property ${property.propertyCode} already exists (edge case), skipping`);
               skipped++;
             } else {
               console.error(`❌ Database error for property ${property.propertyCode}:`, error);
@@ -578,7 +604,7 @@ export async function POST(request: NextRequest) {
       console.log(`📊 Database insertion complete: ${inserted} inserted, ${skipped} skipped, ${dbErrors} errors`);
       
       scrapingResults.propertiesStored = inserted;
-      scrapingResults.propertiesSkipped = skipped;
+      scrapingResults.propertiesSkipped += skipped; // Add DB skips to pre-filter skips
     } else {
       console.log(`⚠️ No properties to store in database`);
     }
