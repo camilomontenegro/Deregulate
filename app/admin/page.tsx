@@ -2,12 +2,6 @@
 
 import { useState, useEffect } from 'react';
 
-interface ApiUsage {
-  used: number;
-  total: number;
-  remaining: number;
-  resetDate: string;
-}
 
 interface DatabaseStats {
   total: number;
@@ -34,7 +28,6 @@ interface FormData {
   propertyType: string;
   operation: string;
   maxRequests: number;
-  distance: number;
   order: string;
   sort: 'asc' | 'desc';
 }
@@ -42,7 +35,6 @@ interface FormData {
 export default function AdminPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [scrapingResults, setScrapingResults] = useState<ScrapingResults | null>(null);
-  const [apiUsage, setApiUsage] = useState<ApiUsage | null>(null);
   const [databaseStats, setDatabaseStats] = useState<DatabaseStats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,7 +43,6 @@ export default function AdminPage() {
     propertyType: 'homes',
     operation: 'sale',
     maxRequests: 5,
-    distance: 20000,
     order: 'price',
     sort: 'asc'
   });
@@ -69,22 +60,10 @@ export default function AdminPage() {
     { value: 'rent', label: 'Rent' }
   ];
 
-  const distanceOptions = [
-    { value: 500, label: '500m' },
-    { value: 1000, label: '1km' },
-    { value: 2000, label: '2km' },
-    { value: 3000, label: '3km' },
-    { value: 5000, label: '5km' },
-    { value: 10000, label: '10km' },
-    { value: 15000, label: '15km' },
-    { value: 20000, label: '20km (default)' },
-    { value: -1, label: 'Random Distance (0m-20km)' }
-  ];
 
   const orderOptions = [
     { value: 'price', label: 'Price' },
     { value: 'publicationDate', label: 'Publication Date' },
-    { value: 'distance', label: 'Distance from Center' },
     { value: 'size', label: 'Size (if available)' },
     { value: 'modificationDate', label: 'Last Modified (rentals)' }
   ];
@@ -95,19 +74,18 @@ export default function AdminPage() {
   ];
 
   useEffect(() => {
-    fetchUsageStats();
+    fetchDatabaseStats();
   }, []);
 
-  const fetchUsageStats = async () => {
+  const fetchDatabaseStats = async () => {
     try {
       const response = await fetch('/api/admin/usage');
       if (response.ok) {
         const data = await response.json();
-        setApiUsage(data.data.apiUsage);
         setDatabaseStats(data.data.databaseStats);
       }
     } catch (error) {
-      console.error('Error fetching usage stats:', error);
+      console.error('Error fetching database stats:', error);
     }
   };
 
@@ -117,7 +95,7 @@ export default function AdminPage() {
     
     setFormData(prev => ({
       ...prev,
-      [name]: type === 'checkbox' ? checked : (name === 'maxRequests' || name === 'distance' ? (value ? parseInt(value) || 1 : 1) : value)
+      [name]: type === 'checkbox' ? checked : (name === 'maxRequests' ? (value ? parseInt(value) || 1 : 1) : value)
     }));
   };
 
@@ -140,7 +118,7 @@ export default function AdminPage() {
 
       if (response.ok) {
         setScrapingResults(data.results);
-        await fetchUsageStats();
+        await fetchDatabaseStats();
       } else {
         setError(data.error || 'An error occurred during scraping');
       }
@@ -163,56 +141,13 @@ export default function AdminPage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">Idealista Admin Dashboard</h1>
-          <p className="mt-2 text-gray-600">Manage property scraping and view API usage statistics</p>
+          <p className="mt-2 text-gray-600">Scrape property data province-wide and view database statistics</p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-1">
-            <div className="bg-white shadow rounded-lg p-6">
-              <h2 className="text-lg font-medium text-gray-900 mb-4">API Usage</h2>
-              {apiUsage ? (
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-500">Used:</span>
-                    <span className="text-sm font-medium">{apiUsage.used}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-500">Total:</span>
-                    <span className="text-sm font-medium">{apiUsage.total}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-500">Remaining:</span>
-                    <span className={`text-sm font-medium ${ 
-                      apiUsage.remaining < 10 ? 'text-red-600' : 'text-green-600'
-                    }`}>
-                      {apiUsage.remaining}
-                    </span>
-                  </div>
-                  
-                  <div className="w-full bg-gray-200 rounded-full h-2.5">
-                    <div 
-                      className={`h-2.5 rounded-full ${
-                        apiUsage.remaining < 10 ? 'bg-red-600' : 'bg-blue-600'
-                      }`}
-                      style={{ width: `${Math.min(100, Math.max(0, (apiUsage.used / apiUsage.total) * 100))}%` }}
-                    ></div>
-                  </div>
-                  
-                  <div className="text-xs text-gray-500">
-                    Resets: {apiUsage.resetDate}
-                  </div>
-                </div>
-              ) : (
-                <div className="animate-pulse">
-                  <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
-                  <div className="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
-                  <div className="h-4 bg-gray-200 rounded w-2/3"></div>
-                </div>
-              )}
-            </div>
-
             {databaseStats && (
-              <div className="bg-white shadow rounded-lg p-6 mt-6">
+              <div className="bg-white shadow rounded-lg p-6">
                 <h2 className="text-lg font-medium text-gray-900 mb-4">Database Stats</h2>
                 <div className="space-y-3">
                   <div className="flex justify-between">
@@ -252,7 +187,7 @@ export default function AdminPage() {
               <h2 className="text-lg font-medium text-gray-900 mb-4">Start Scraping</h2>
               
               <form onSubmit={handleStartScraping} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4">
                   <div>
                     <label htmlFor="city" className="block text-sm font-medium text-gray-700">
                       City
@@ -319,29 +254,10 @@ export default function AdminPage() {
                       className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
                     />
                     <p className="mt-1 text-xs text-gray-500">
-                      Higher values use more API credits (max 20)
+                      Number of pages to scrape per province (max 20)
                     </p>
                   </div>
 
-                  <div>
-                    <label htmlFor="distance" className="block text-sm font-medium text-gray-700">
-                      Search Radius
-                    </label>
-                    <select
-                      id="distance"
-                      name="distance"
-                      value={formData.distance}
-                      onChange={handleInputChange}
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
-                    >
-                      {distanceOptions.map(option => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-gray-500">
-                      Radius from city center. Province-wide search includes nearby towns automatically.
-                    </p>
-                  </div>
 
                   <div>
                     <label htmlFor="order" className="block text-sm font-medium text-gray-700">
@@ -384,28 +300,10 @@ export default function AdminPage() {
                   </div>
                 </div>
 
-                {apiUsage && apiUsage.remaining < formData.maxRequests && (
-                  <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
-                    <div className="flex">
-                      <div className="ml-3">
-                        <h3 className="text-sm font-medium text-yellow-800">
-                          Insufficient API Credits
-                        </h3>
-                        <div className="mt-2 text-sm text-yellow-700">
-                          <p>
-                            You have {apiUsage.remaining} API credits remaining, but this scraping session 
-                            requires {formData.maxRequests} credits. Please reduce the max requests or wait 
-                            for your credits to reset on {apiUsage.resetDate}.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
 
                 <button
                   type="submit"
-                  disabled={isLoading || !!(apiUsage && apiUsage.remaining < formData.maxRequests)}
+                  disabled={isLoading}
                   className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-gray-300 disabled:cursor-not-allowed"
                 >
                   {isLoading ? (

@@ -291,20 +291,39 @@ const Map = () => {
               ['linear'],
               ['zoom'],
               0, 1,
-              9, 3
+              9, heatmapSettings.maxIntensity
             ],
-            // Color ramp for heatmap  
+            // Color ramp focusing on lower density ranges where data actually exists
             'heatmap-color': [
               'interpolate',
               ['linear'],
               ['heatmap-density'],
-              0, 'rgba(0, 0, 255, 0)',         // Transparent blue (no data)
-              0.2, 'rgba(0, 0, 255, 0.3)',     // Light blue (cheapest)
-              0.4, 'rgba(0, 255, 255, 0.5)',   // Cyan (below average)
-              0.5, 'rgba(0, 255, 0, 0.7)',     // Green (average)
-              0.6, 'rgba(255, 255, 0, 0.8)',   // Yellow (above average)
-              0.8, 'rgba(255, 0, 0, 0.9)',     // Red (expensive)
-              1, 'rgba(255, 20, 147, 1)'       // Pink (ultra-premium top 1%)
+              0, 'rgba(0, 0, 255, 0)',         // Transparent (no data)
+              0.01, 'rgba(0, 0, 255, 0.1)',   // Very faint blue
+              0.02, 'rgba(0, 0, 255, 0.15)',  // Light blue
+              0.03, 'rgba(0, 0, 255, 0.2)',   // Light blue
+              0.04, 'rgba(0, 0, 255, 0.25)',  // Light blue
+              0.05, 'rgba(0, 0, 255, 0.3)',   // Light blue
+              0.06, 'rgba(0, 50, 255, 0.35)', // Blue
+              0.07, 'rgba(0, 100, 255, 0.4)', // Blue-cyan transition
+              0.08, 'rgba(0, 150, 255, 0.45)', // Blue-cyan
+              0.09, 'rgba(0, 200, 255, 0.5)', // Cyan-ish
+              0.1, 'rgba(0, 255, 255, 0.55)', // Cyan
+              0.12, 'rgba(0, 255, 200, 0.6)', // Cyan-green transition
+              0.14, 'rgba(0, 255, 150, 0.65)', // Cyan-green
+              0.16, 'rgba(0, 255, 100, 0.7)', // Green-cyan
+              0.18, 'rgba(0, 255, 50, 0.75)', // Green
+              0.2, 'rgba(0, 255, 0, 0.8)',    // Pure green
+              0.25, 'rgba(100, 255, 0, 0.82)', // Green-yellow
+              0.3, 'rgba(200, 255, 0, 0.85)', // Yellow-green
+              0.35, 'rgba(255, 255, 0, 0.87)', // Yellow
+              0.4, 'rgba(255, 200, 0, 0.9)', // Orange-yellow
+              0.5, 'rgba(255, 150, 0, 0.92)', // Orange
+              0.6, 'rgba(255, 100, 0, 0.95)', // Red-orange
+              0.7, 'rgba(255, 50, 0, 0.97)',  // Red
+              0.8, 'rgba(255, 0, 0, 0.98)',   // Red
+              0.9, 'rgba(255, 20, 100, 0.99)', // Pink-red
+              1, 'rgba(255, 20, 147, 1)'      // Pink (ultra-premium)
             ],
             // Adjust the heatmap radius by zoom level
             'heatmap-radius': [
@@ -345,30 +364,71 @@ const Map = () => {
           9, heatmapSettings.opacity * 0.5
         ]);
 
-        // Update color gradient based on scaling mode
+        map.setPaintProperty(layerId, 'heatmap-intensity', [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          0, 1,
+          9, heatmapSettings.maxIntensity
+        ]);
+
+        // Update color gradient focusing on lower density ranges where data exists
         const colorGradient = heatmapSettings.scalingMode === 'minMax' 
           ? [
               'interpolate',
               ['linear'],
               ['heatmap-density'],
-              0, 'rgba(0, 0, 255, 0)',         // Transparent blue (no data)
-              0.2, 'rgba(0, 0, 255, 0.3)',     // Light blue (cheapest)
-              0.4, 'rgba(0, 255, 255, 0.5)',   // Cyan (below average)
-              0.5, 'rgba(0, 255, 0, 0.7)',     // Green (average)
-              0.6, 'rgba(255, 255, 0, 0.8)',   // Yellow (above average)
-              0.8, 'rgba(255, 0, 0, 0.9)',     // Red (expensive)
-              1, 'rgba(255, 20, 147, 1)'       // Pink (ultra-premium top 1%)
+              0, 'rgba(0, 0, 255, 0)',         // Transparent (no data)
+              0.01, 'rgba(0, 0, 255, 0.1)',   // Very faint blue
+              0.02, 'rgba(0, 0, 255, 0.15)',  // Light blue
+              0.03, 'rgba(0, 0, 255, 0.2)',   // Light blue
+              0.04, 'rgba(0, 0, 255, 0.25)',  // Light blue
+              0.05, 'rgba(0, 0, 255, 0.3)',   // Light blue
+              0.06, 'rgba(0, 50, 255, 0.35)', // Blue
+              0.07, 'rgba(0, 100, 255, 0.4)', // Blue-cyan transition
+              0.08, 'rgba(0, 150, 255, 0.45)', // Blue-cyan
+              0.09, 'rgba(0, 200, 255, 0.5)', // Cyan-ish
+              0.1, 'rgba(0, 255, 255, 0.55)', // Cyan
+              0.12, 'rgba(0, 255, 200, 0.6)', // Cyan-green transition
+              0.14, 'rgba(0, 255, 150, 0.65)', // Cyan-green
+              0.16, 'rgba(0, 255, 100, 0.7)', // Green-cyan
+              0.18, 'rgba(0, 255, 50, 0.75)', // Green
+              0.2, 'rgba(0, 255, 0, 0.8)',    // Pure green
+              0.25, 'rgba(100, 255, 0, 0.82)', // Green-yellow
+              0.3, 'rgba(200, 255, 0, 0.85)', // Yellow-green
+              0.35, 'rgba(255, 255, 0, 0.87)', // Yellow
+              0.4, 'rgba(255, 200, 0, 0.9)', // Orange-yellow
+              0.5, 'rgba(255, 150, 0, 0.92)', // Orange
+              0.6, 'rgba(255, 100, 0, 0.95)', // Red-orange
+              0.7, 'rgba(255, 50, 0, 0.97)',  // Red
+              0.8, 'rgba(255, 0, 0, 0.98)',   // Red
+              0.9, 'rgba(255, 20, 100, 0.99)', // Pink-red
+              1, 'rgba(255, 20, 147, 1)'      // Pink (ultra-premium)
             ]
           : [
               'interpolate',
               ['linear'],
               ['heatmap-density'],
-              0, 'rgba(0, 0, 255, 0)',
-              0.2, 'rgba(0, 0, 255, 0.3)',
-              0.4, 'rgba(0, 255, 255, 0.5)',
-              0.6, 'rgba(0, 255, 0, 0.7)',
-              0.8, 'rgba(255, 255, 0, 0.8)',
-              1, 'rgba(255, 0, 0, 1)'
+              0, 'rgba(0, 0, 255, 0)',         // Transparent (no data)
+              0.01, 'rgba(0, 0, 255, 0.1)',   // Very faint blue
+              0.02, 'rgba(0, 0, 255, 0.15)',  // Light blue
+              0.03, 'rgba(0, 0, 255, 0.2)',   // Light blue
+              0.04, 'rgba(0, 0, 255, 0.25)',  // Light blue
+              0.05, 'rgba(0, 0, 255, 0.3)',   // Light blue
+              0.07, 'rgba(0, 100, 255, 0.4)', // Blue-cyan transition
+              0.09, 'rgba(0, 200, 255, 0.5)', // Cyan-ish
+              0.11, 'rgba(0, 255, 255, 0.55)', // Cyan
+              0.13, 'rgba(0, 255, 200, 0.6)', // Cyan-green
+              0.15, 'rgba(0, 255, 150, 0.65)', // Cyan-green
+              0.17, 'rgba(0, 255, 100, 0.7)', // Green-cyan
+              0.19, 'rgba(0, 255, 50, 0.75)', // Green
+              0.21, 'rgba(0, 255, 0, 0.8)',   // Pure green
+              0.25, 'rgba(100, 255, 0, 0.82)', // Green-yellow
+              0.3, 'rgba(200, 255, 0, 0.85)', // Yellow-green
+              0.4, 'rgba(255, 255, 0, 0.87)', // Yellow
+              0.5, 'rgba(255, 150, 0, 0.9)', // Orange
+              0.6, 'rgba(255, 100, 0, 0.95)', // Red-orange
+              0.8, 'rgba(255, 0, 0, 1)'       // Red (expensive)
             ];
 
         map.setPaintProperty(layerId, 'heatmap-color', colorGradient);
