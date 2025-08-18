@@ -16,6 +16,8 @@ const Map = () => {
   const {mapRef, mapInstanceRef, properties, isClient, loading, heatmapRef, toggleMarkers, totalPropertiesCount, loadingMore, allChunksLoaded, loadNextChunk} = useMap();
   const {heatmapEnabled, setHeatmapEnabled, heatmapRef: heatmapRef2} = useHeatMap({mapInstanceRef, ref: heatmapRef});
   const [markersEnabled, setMarkersEnabled] = useState(false);
+  const [buildingDensityEnabled, setBuildingDensityEnabled] = useState(false);
+  const [buildingDensityData, setBuildingDensityData] = useState<any[]>([]);
   const [heatmapSettings, setHeatmapSettings] = useState({
     radius: 25, // Reduced from 50
     opacity: 0.5, // Reduced from 0.8
@@ -436,6 +438,73 @@ const Map = () => {
     }
   }, [properties, heatmapSettings, heatmapEnabled]);
 
+  // Handle building density heatmap
+  useEffect(() => {
+    if (mapInstanceRef.current && buildingDensityData.length > 0) {
+      const map = mapInstanceRef.current;
+      const layerId = 'building-density-heat';
+      const sourceId = 'building-density-source';
+
+      // Create GeoJSON data for building density heatmap
+      const densityGeoJSON = {
+        type: 'FeatureCollection' as const,
+        features: buildingDensityData.map(building => ({
+          type: 'Feature' as const,
+          properties: {
+            apts: building.total_apartments
+          },
+          geometry: {
+            type: 'Point' as const,
+            coordinates: [building.longitude, building.latitude]
+          }
+        }))
+      };
+
+      if (map.getSource(sourceId)) {
+        // Update existing source
+        (map.getSource(sourceId) as maplibregl.GeoJSONSource).setData(densityGeoJSON);
+      } else {
+        // Add source
+        map.addSource(sourceId, {
+          type: 'geojson',
+          data: densityGeoJSON
+        });
+
+        // Add building density heatmap layer
+        map.addLayer({
+          id: layerId,
+          type: 'heatmap',
+          source: sourceId,
+          layout: {
+            visibility: buildingDensityEnabled ? 'visible' : 'none'
+          },
+          paint: {
+            'heatmap-weight': ['interpolate', ['linear'], ['get', 'apts'], 0, 0, 60, 1],
+            'heatmap-intensity': 1.0,
+            'heatmap-radius': 24,
+            'heatmap-opacity': 0.7,
+            'heatmap-color': [
+              'interpolate',
+              ['linear'],
+              ['heatmap-density'],
+              0, 'rgba(0, 0, 255, 0)',         // Transparent
+              0.1, 'rgba(0, 0, 255, 0.4)',    // Blue (low density)
+              0.3, 'rgba(0, 255, 255, 0.6)',  // Cyan 
+              0.5, 'rgba(0, 255, 0, 0.7)',    // Green (medium)
+              0.7, 'rgba(255, 255, 0, 0.8)',  // Yellow (high)
+              1, 'rgba(255, 0, 0, 1)'         // Red (very high)
+            ]
+          }
+        });
+      }
+
+      // Update layer visibility
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, 'visibility', buildingDensityEnabled ? 'visible' : 'none');
+      }
+    }
+  }, [buildingDensityData, buildingDensityEnabled]);
+
   const handleHeatmapToggle = (enabled: boolean) => {
     setHeatmapEnabled(enabled);
   };
@@ -443,6 +512,31 @@ const Map = () => {
   const handleMarkersToggle = (enabled: boolean) => {
     setMarkersEnabled(enabled);
     toggleMarkers(enabled);
+  };
+
+  const handleBuildingDensityToggle = async (enabled: boolean) => {
+    setBuildingDensityEnabled(enabled);
+    
+    if (enabled && buildingDensityData.length === 0) {
+      // Load building density data from Supabase
+      try {
+        const supabase = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+        );
+        
+        const { data, error } = await supabase
+          .from("building_density")
+          .select("latitude, longitude, total_apartments")
+          .eq("municipality", "Sevilla")
+          .limit(100000);
+          
+        if (error) throw error;
+        setBuildingDensityData(data || []);
+      } catch (error) {
+        console.error('Error loading building density data:', error);
+      }
+    }
   };
 
   // Don't render anything until client-side to prevent hydration issues
@@ -518,6 +612,9 @@ const Map = () => {
         markersEnabled={markersEnabled}
         onMarkersToggle={handleMarkersToggle}
         propertyCount={properties.length}
+        buildingDensityEnabled={buildingDensityEnabled}
+        onBuildingDensityToggle={handleBuildingDensityToggle}
+        buildingDensityCount={buildingDensityData.length}
         heatmapSettings={heatmapSettings}
         onHeatmapSettingsChange={setHeatmapSettings}
       />

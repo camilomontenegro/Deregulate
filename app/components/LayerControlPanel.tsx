@@ -9,6 +9,9 @@ interface LayerControlPanelProps {
   markersEnabled: boolean;
   onMarkersToggle: (enabled: boolean) => void;
   propertyCount: number;
+  buildingDensityEnabled?: boolean;
+  onBuildingDensityToggle?: (enabled: boolean) => void;
+  buildingDensityCount?: number;
   heatmapSettings?: {
     radius: number;
     opacity: number;
@@ -25,6 +28,9 @@ const LayerControlPanel = ({
   markersEnabled, 
   onMarkersToggle, 
   propertyCount,
+  buildingDensityEnabled = false,
+  onBuildingDensityToggle,
+  buildingDensityCount = 0,
   heatmapSettings,
   onHeatmapSettingsChange 
 }: LayerControlPanelProps) => {
@@ -78,7 +84,14 @@ const LayerControlPanel = ({
             {/* Header */}
             <div>
               <h3 className="text-lg font-semibold text-gray-900">Map Layers</h3>
-              <p className="text-sm text-gray-500">{propertyCount} properties loaded</p>
+              <p className="text-sm text-gray-500">
+                {propertyCount} properties loaded
+                {buildingDensityCount > 0 && (
+                  <span className="block text-gray-400">
+                    {buildingDensityCount} buildings with density data
+                  </span>
+                )}
+              </p>
             </div>
 
             {/* Layer Controls */}
@@ -192,9 +205,48 @@ const LayerControlPanel = ({
                   </div>
                 )}
               </div>
+
+              {/* Building Density Toggle */}
+              {onBuildingDensityToggle && (
+                <div className="border-t border-gray-200 pt-3">
+                  <ToggleSwitch
+                    enabled={buildingDensityEnabled}
+                    onChange={onBuildingDensityToggle}
+                    label="Building Density"
+                    description="Show residential building density from Cadastral data"
+                  />
+                </div>
+              )}
             </div>
 
-            {/* Legend */}
+            {/* Building Density Legend */}
+            {buildingDensityEnabled && (
+              <div className="border-t border-gray-200 pt-3">
+                <div className="text-sm font-medium text-gray-900 mb-2">
+                  Building Density Scale
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-blue-400"></div>
+                    <span className="text-xs text-gray-600">Low (1-5 apartments)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-green-400"></div>
+                    <span className="text-xs text-gray-600">Medium (6-15 apartments)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
+                    <span className="text-xs text-gray-600">High (16-30 apartments)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                    <span className="text-xs text-gray-600">Very High (30+ apartments)</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Property Heatmap Legend */}
             {heatmapEnabled && (
               <div className="border-t border-gray-200 pt-3">
                 <div className="text-sm font-medium text-gray-900 mb-2">

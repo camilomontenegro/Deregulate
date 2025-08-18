@@ -169,7 +169,7 @@ async function searchPropertiesInCity(city: string, propertyType: string, operat
     
     // Debug: Log municipalities found in this page
     if (result.elementList && result.elementList.length > 0) {
-      const municipalities = [...new Set(result.elementList.map(p => p.municipality).filter(Boolean))];
+      const municipalities = [...new Set(result.elementList.map((p: any) => p.municipality).filter(Boolean))];
       console.log(`📍 Municipalities found on page ${page}:`, municipalities.join(', '));
     }
     

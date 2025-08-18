@@ -37,6 +37,10 @@ export default function AdminPage() {
   const [scrapingResults, setScrapingResults] = useState<ScrapingResults | null>(null);
   const [databaseStats, setDatabaseStats] = useState<DatabaseStats | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isDensityLoading, setIsDensityLoading] = useState(false);
+  const [densityResults, setDensityResults] = useState<any>(null);
+  const [densityError, setDensityError] = useState<string | null>(null);
+  const [maxBuildings, setMaxBuildings] = useState<number>(500);
 
   const [formData, setFormData] = useState<FormData>({
     city: 'Madrid',
@@ -127,6 +131,37 @@ export default function AdminPage() {
       console.error('Scraping error:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleDensityIngestion = async () => {
+    setIsDensityLoading(true);
+    setDensityError(null);
+    setDensityResults(null);
+
+    try {
+      // For now, we'll trigger the npm script directly via a simple fetch
+      // In production, you'd want to create a proper API endpoint
+      const response = await fetch('/api/admin/density', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ maxBuildings })
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setDensityResults(data.results);
+      } else {
+        setDensityError(data.error || 'An error occurred during density ingestion');
+      }
+    } catch (error) {
+      setDensityError('Failed to connect to the density ingestion service');
+      console.error('Density ingestion error:', error);
+    } finally {
+      setIsDensityLoading(false);
     }
   };
 
@@ -374,6 +409,86 @@ export default function AdminPage() {
                           </div>
                         ))}
                       </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Building Density Ingestion Card */}
+            <div className="mt-8 bg-white shadow rounded-lg p-6">
+              <h2 className="text-lg font-medium text-gray-900 mb-4">Building Density Ingestion</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Process GeoJSON file from /data/sevilla_buildings.geojson to extract building density data directly from the file.
+              </p>
+              
+              <div className="mb-4">
+                <label htmlFor="maxBuildings" className="block text-sm font-medium text-gray-700">
+                  Max Buildings to Process
+                </label>
+                <input
+                  type="number"
+                  id="maxBuildings"
+                  name="maxBuildings"
+                  min="1"
+                  max="10000"
+                  value={maxBuildings}
+                  onChange={(e) => setMaxBuildings(parseInt(e.target.value) || 500)}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 sm:text-sm border p-2"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Number of buildings to process from the GeoJSON file (recommended: 500-1000 for testing)
+                </p>
+              </div>
+              
+              <button
+                onClick={handleDensityIngestion}
+                disabled={isDensityLoading}
+                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:bg-gray-300 disabled:cursor-not-allowed"
+              >
+                {isDensityLoading ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Processing GeoJSON...
+                  </>
+                ) : (
+                  `Start Density Ingestion (${maxBuildings} buildings)`
+                )}
+              </button>
+
+              {densityError && (
+                <div className="mt-4 bg-red-50 border border-red-200 rounded-md p-4">
+                  <div className="text-sm text-red-700">{densityError}</div>
+                </div>
+              )}
+
+              {densityResults && (
+                <div className="mt-6 bg-green-50 border border-green-200 rounded-md p-4">
+                  <h3 className="text-lg font-medium text-green-800 mb-3">Density Ingestion Completed</h3>
+                  
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-green-600">{densityResults.processed || 0}</div>
+                      <div className="text-sm text-gray-500">Buildings Processed</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-blue-600">{densityResults.uniqueRCs || 0}</div>
+                      <div className="text-sm text-gray-500">Unique References</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-purple-600">
+                        {densityResults.duration ? formatDuration(densityResults.duration) : 'N/A'}
+                      </div>
+                      <div className="text-sm text-gray-500">Duration</div>
+                    </div>
+                  </div>
+
+                  {densityResults.message && (
+                    <div className="text-sm text-gray-600 mt-2">
+                      {densityResults.message}
                     </div>
                   )}
                 </div>

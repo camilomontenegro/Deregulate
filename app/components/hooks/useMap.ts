@@ -9,7 +9,7 @@ const majorCities = [
   { name: 'Seville', lat: 37.3891, lng: -5.9845 }
 ];
 
-const MAPTILER_API_KEY = 'z3OfJgO4Nbj34x56NGlf';
+const MAPTILER_API_KEY = process.env.NEXT_PUBLIC_MAPTILER_API_KEY;
 
 interface Property {
   id: number;
