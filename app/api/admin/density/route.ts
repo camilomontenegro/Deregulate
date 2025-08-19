@@ -43,12 +43,22 @@ export async function POST(request: NextRequest) {
       lon,
       lat,
       address,
+      currentUse,
+      conditionOfConstruction,
+      beginningYear,
+      numberOfDwellings,
+      buildingAreaM2,
     }: {
       rc14: string;
       apartments: number;
       lon: number;
       lat: number;
       address?: string;
+      currentUse?: string;
+      conditionOfConstruction?: string;
+      beginningYear?: number;
+      numberOfDwellings?: number;
+      buildingAreaM2?: number;
     }) {
       await supabase.from("building_density").upsert(
         {
@@ -61,6 +71,11 @@ export async function POST(request: NextRequest) {
           province: "Sevilla",
           last_updated: new Date().toISOString(),
           raw_cadastral_data: null,
+          current_use: currentUse || null,
+          condition_of_construction: conditionOfConstruction || null,
+          beginning_year: beginningYear || null,
+          number_of_dwellings: numberOfDwellings || null,
+          building_area_m2: buildingAreaM2 || null,
         },
         { onConflict: "cadastral_ref_building" }
       );
@@ -135,13 +150,26 @@ export async function POST(request: NextRequest) {
           if (seen.has(rc14)) return; // dedupe
           seen.add(rc14);
 
-          // 2) Apartments
+          // 2) Apartments and filter fields
           const a = Number(f.properties?.numberOfDwellings ?? f.properties?.numberOfBuildingUnits ?? 0);
-          if (!Number.isFinite(a) || a <= 0) return; // skip non-residential / unknown
+          if (!Number.isFinite(a) || a <= 0) return; // skip buildings without dwelling units
 
-          // Optional: filter to residential only
-          const use = String(f.properties?.currentUse ?? "").toLowerCase();
-          if (use && !use.includes("residential")) return; // comment out if you want all uses
+          // Extract filter fields
+          const currentUse = f.properties?.currentUse ? String(f.properties.currentUse) : undefined;
+          const conditionOfConstruction = f.properties?.conditionOfConstruction ? String(f.properties.conditionOfConstruction) : undefined;
+          
+          // Extract year from date format "1955-01-01T00:00:00" -> 1955
+          let beginningYear: number | undefined = undefined;
+          if (f.properties?.beginning) {
+            const dateString = String(f.properties.beginning);
+            const yearMatch = dateString.match(/^\d{4}/); // Get first 4 digits at start
+            if (yearMatch) {
+              beginningYear = Number(yearMatch[0]);
+            }
+          }
+          
+          const numberOfDwellings = f.properties?.numberOfDwellings ? Number(f.properties.numberOfDwellings) : undefined;
+          const buildingAreaM2 = f.properties?.value ? Number(f.properties.value) : undefined;
 
           // 3) Centroid (fix coord order if needed)
           let geom = f.geometry;
@@ -174,11 +202,27 @@ export async function POST(request: NextRequest) {
             lon,
             lat,
             address: f.properties?.informationSystem || undefined,
+            currentUse,
+            conditionOfConstruction,
+            beginningYear,
+            numberOfDwellings,
+            buildingAreaM2,
           });
 
           processed++;
           if (processed % 100 === 0) {
             console.log(`Upserted ${processed} buildings…`);
+            // Log sample of filter data every 100 records
+            if (processed === 100) {
+              console.log('Sample filter data:', {
+                currentUse,
+                conditionOfConstruction,
+                beginningYear,
+                numberOfDwellings,
+                buildingAreaM2,
+                totalApartments: a
+              });
+            }
           }
         } catch (e) {
           console.warn("Skipped feature error:", (e as Error).message);
