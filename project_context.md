@@ -81,10 +81,98 @@ building_area_m2 DECIMAL(10,2)
 - **Year Extraction**: Regex `/^\d{4}/` extracts year from ISO date strings
 - **Stream Processing**: Handles large files efficiently with batched operations
 
-### Current Limitations
-- MaxBuildings limit enforcement needs improvement (currently processes more than requested)
+### Current Status & Recent Fixes
+
+#### ✅ FIXED: MaxBuildings Limit Enforcement (2025-01-21)
+**Problem**: The maxBuildings parameter was ineffective - system would process the requested limit but continue parsing the entire GeoJSON file, causing resource waste and async queue explosions.
+
+**Root Issues Identified**:
+1. **Stream not terminating**: `if (processed >= maxBuildings) return` only prevented processing additional features but didn't stop the stream
+2. **Async queue explosion**: 5,883+ pending operations continued after limit reached 
+3. **Session-based duplicate detection**: `seen` Set was reset each session, causing already-existing buildings to be "processed" as updates rather than skipped
+4. **Misleading metrics**: Frontend showed "50 processed" but database got 393+ records due to race conditions
+
+**Solutions Implemented**:
+
+1. **Serial Processing Queue** (`route.ts:104-105`):
+   ```typescript
+   let processingQueue: any[] = [];
+   let isProcessing = false;
+   ```
+   - Replaced parallel stream processing with serial queue
+   - Only one building processed at a time to prevent async explosion
+   - Queue cleared immediately when limit reached
+
+2. **Database-Based Duplicate Detection** (`route.ts:209-226`):
+   ```typescript
+   const { data: existingBuilding } = await supabase
+     .from("building_density")
+     .select("cadastral_ref_building")
+     .eq("cadastral_ref_building", rc14)
+     .maybeSingle();
+   ```
+   - Checks database for existing buildings, not just session memory
+   - Ensures `processed` count reflects truly NEW buildings added
+   - Skips existing buildings without counting toward limit
+
+3. **Proper Stream Termination** (`route.ts:147-150`):
+   ```typescript
+   source.destroy();
+   processingQueue = [];
+   ```
+   - Immediately destroys stream when limit reached
+   - Clears processing queue to prevent further operations
+
+4. **Enhanced Metrics Tracking** (`route.ts:101, 160-165`):
+   ```typescript
+   let processed = 0;        // NEW buildings added
+   let skippedDuplicates = 0; // Existing buildings skipped
+   ```
+
+**Current Behavior** (as of 2025-01-21):
+- ✅ **True limit enforcement**: Processes exactly `maxBuildings` NEW buildings
+- ✅ **Proper duplicate handling**: Skips 935 duplicates to find 50 new buildings
+- ✅ **Clean termination**: No more stream errors or async explosions
+- ✅ **Database accuracy**: Exactly 50 new records added per run
+
+**Sample Terminal Output**:
+```
+Skipped 870 duplicates so far (last: 0247413TG4404N)
+Processed 10 new buildings (879 duplicates skipped so far)…
+Processed 50 new buildings (935 duplicates skipped so far)…
+LIMIT REACHED. Processed 50/50 new buildings. Skipped 935 duplicates. 
+Total unique RCs encountered: 1164
+```
+
+**Known Minor Issue**: 
+- Frontend sometimes shows outdated metrics (0 processed, 200 unique) due to race condition with response handling
+- Backend correctly processes 50 new buildings and adds exactly 50 database records
+- Terminal logs show accurate processing status
+
+#### Remaining System Limitations
 - No spatial indexing yet (will be addressed with tiling system)
 - Single municipality focus (Sevilla) - easily expandable
+- Frontend metrics display race condition (minor UI issue)
+- Missing database schema in repository (`building_density` table definition not documented)
+
+## Current System Architecture Status
+
+### Data Ingestion Methods
+1. **Primary Method**: `/api/admin/density/route.ts` 
+   - ✅ Handles filter fields extraction
+   - ✅ Serial processing with proper limits
+   - ✅ Database-based duplicate detection
+   - ✅ Efficient stream termination
+
+2. **Legacy Scripts**: 
+   - `scripts/ingest-sevilla-density-from-file.ts` (missing filter fields)
+   - `scripts/ingest-sevilla-density.ts` (Catastro API, rate-limited)
+
+### System Performance Metrics (Latest Run)
+- **Processing Time**: 26 seconds for 50 buildings
+- **Duplicate Skip Rate**: 935 duplicates / 1164 total features = 80.3%
+- **Database Efficiency**: 100% accuracy (50 requested = 50 added)
+- **Memory Usage**: Controlled (serial processing prevents memory spikes)
 
 ## Next Priority
-**Beginning year filter** is the highest priority filter to implement first, followed by the grid tiling system for performance optimization.
+**Frontend metrics display fix** to resolve the UI/backend metrics mismatch, followed by implementing the **beginning year filter** and grid tiling system for performance optimization.

@@ -98,8 +98,12 @@ export async function POST(request: NextRequest) {
       const features = streamArray();
 
       let processed = 0;
+      let skippedDuplicates = 0;
       const seen = new Set<string>();
       const startTime = Date.now();
+      let limitReached = false;
+      let processingQueue: any[] = [];
+      let isProcessing = false;
 
       // Add error handling
       source.on('error', (err: any) => {
@@ -134,8 +138,50 @@ export async function POST(request: NextRequest) {
         ));
       });
 
-      features.on("data", async ({ value }: { value: any }) => {
-        if (processed >= maxBuildings) return;
+      // Helper function to terminate processing when limit is reached
+      const initiateTermination = () => {
+        if (limitReached) return;
+        limitReached = true;
+        
+        console.log(`LIMIT REACHED. Processed ${processed}/${maxBuildings} new buildings. Skipped ${skippedDuplicates} duplicates. Total unique RCs encountered: ${seen.size}`);
+        
+        // Destroy the source stream to stop reading new features
+        source.destroy();
+        
+        // Clear the processing queue to prevent further processing
+        processingQueue = [];
+        
+        const duration = Date.now() - startTime;
+        
+        resolve(NextResponse.json({
+          success: true,
+          results: {
+            processed,
+            skippedDuplicates,
+            uniqueRCs: seen.size,
+            duration,
+            limitReached: true,
+            message: `Successfully processed ${processed} new buildings (limit: ${maxBuildings}). Skipped ${skippedDuplicates} duplicates. Total unique references encountered: ${seen.size}`
+          }
+        }));
+      };
+
+      // Handle stream closure (when limit is reached)
+      source.on('close', () => {
+        if (limitReached) return; // Already handled
+      });
+
+      // Process features synchronously to avoid async queue explosion
+
+      const processNext = async () => {
+        if (isProcessing || processingQueue.length === 0 || limitReached) return;
+        if (processed >= maxBuildings) {
+          initiateTermination();
+          return;
+        }
+
+        isProcessing = true;
+        const { value } = processingQueue.shift();
 
         const f = value as {
           type: "Feature";
@@ -146,13 +192,48 @@ export async function POST(request: NextRequest) {
         try {
           // 1) RC14
           const rc14: string | undefined = f.properties?.localId || f.properties?.reference || f.properties?.gml_id;
-          if (!rc14) return;
-          if (seen.has(rc14)) return; // dedupe
+          if (!rc14) {
+            isProcessing = false;
+            setImmediate(processNext); // Process next item
+            return;
+          }
+          
+          // Check both in-memory cache and database for duplicates
+          if (seen.has(rc14)) {
+            skippedDuplicates++;
+            isProcessing = false;
+            setImmediate(processNext); // Process next item
+            return;
+          }
+          
+          // Check if this building already exists in the database
+          const { data: existingBuilding, error: dbError } = await supabase
+            .from("building_density")
+            .select("cadastral_ref_building")
+            .eq("cadastral_ref_building", rc14)
+            .maybeSingle();
+            
+          if (existingBuilding) {
+            // Building already exists in database, skip it
+            seen.add(rc14); // Add to cache to avoid future DB queries
+            skippedDuplicates++;
+            if (skippedDuplicates % 10 === 0) {
+              console.log(`Skipped ${skippedDuplicates} duplicates so far (last: ${rc14})`);
+            }
+            isProcessing = false;
+            setImmediate(processNext); // Process next item
+            return;
+          }
+          
           seen.add(rc14);
 
           // 2) Apartments and filter fields
           const a = Number(f.properties?.numberOfDwellings ?? f.properties?.numberOfBuildingUnits ?? 0);
-          if (!Number.isFinite(a) || a <= 0) return; // skip buildings without dwelling units
+          if (!Number.isFinite(a) || a <= 0) {
+            isProcessing = false;
+            setImmediate(processNext); // Process next item
+            return;
+          }
 
           // Extract filter fields
           const currentUse = f.properties?.currentUse ? String(f.properties.currentUse) : undefined;
@@ -173,7 +254,11 @@ export async function POST(request: NextRequest) {
 
           // 3) Centroid (fix coord order if needed)
           let geom = f.geometry;
-          if (!geom) return;
+          if (!geom) {
+            isProcessing = false;
+            setImmediate(processNext); // Process next item
+            return;
+          }
 
           // Quick coordinate fix for Polygon/MultiPolygon if they came [lat,lon]
           if (geom.type === "Polygon") {
@@ -195,7 +280,7 @@ export async function POST(request: NextRequest) {
           const centroid = turf.centroid({ type: "Feature", properties: {}, geometry: geom as any });
           const [lon, lat] = centroid.geometry.coordinates as [number, number];
 
-          // 4) Upsert
+          // 4) Upsert synchronously
           await upsertRow({
             rc14,
             apartments: a,
@@ -208,12 +293,13 @@ export async function POST(request: NextRequest) {
             numberOfDwellings,
             buildingAreaM2,
           });
-
+          
           processed++;
-          if (processed % 100 === 0) {
-            console.log(`Upserted ${processed} buildings…`);
+          
+          if (processed % 10 === 0) {
+            console.log(`Processed ${processed} new buildings (${skippedDuplicates} duplicates skipped so far)…`);
             // Log sample of filter data every 100 records
-            if (processed === 100) {
+            if (processed === 10) {
               console.log('Sample filter data:', {
                 currentUse,
                 conditionOfConstruction,
@@ -224,28 +310,57 @@ export async function POST(request: NextRequest) {
               });
             }
           }
+
+          // Check if we've hit the limit
+          if (processed >= maxBuildings) {
+            initiateTermination();
+            return;
+          }
+
         } catch (e) {
           console.warn("Skipped feature error:", (e as Error).message);
+        } finally {
+          isProcessing = false;
+          // Continue processing next item
+          setImmediate(processNext);
         }
+      };
+
+      features.on("data", ({ value }: { value: any }) => {
+        // Stop accepting new features if limit reached
+        if (limitReached) return;
+        
+        // Add to processing queue
+        processingQueue.push({ value });
+        
+        // Start processing if not already processing
+        processNext();
       });
 
       features.on("end", () => {
+        if (limitReached) return; // Already resolved by terminateProcessing
+        
         const duration = Date.now() - startTime;
-        console.log(`DONE. Inserted/updated ~${processed}. Unique RCs: ${seen.size}`);
+        console.log(`DONE. Processed ${processed} new buildings. Skipped ${skippedDuplicates} duplicates. Total unique RCs: ${seen.size}`);
         
         resolve(NextResponse.json({
           success: true,
           results: {
             processed,
+            skippedDuplicates,
             uniqueRCs: seen.size,
             duration,
-            message: `Successfully processed ${processed} buildings with ${seen.size} unique cadastral references`
+            limitReached: false,
+            message: `Successfully processed ${processed} new buildings. Skipped ${skippedDuplicates} duplicates. Total unique references: ${seen.size}`
           }
         }));
       });
 
       // Pipeline setup
       pipe(source, jsonParser, pickFeatures, features).catch((error: any) => {
+        // Ignore errors when we've intentionally destroyed the stream due to limit
+        if (limitReached) return;
+        
         console.error("Pipeline error:", error);
         resolve(NextResponse.json(
           { error: `Pipeline failed: ${error.message}` },
