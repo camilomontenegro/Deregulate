@@ -7,13 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "ingest:sevilla": "TS_NODE_TRANSPILE_ONLY=1 node --loader ts-node/esm scripts/ingest-sevilla-density.ts",
     "ingest:sevilla-file": "npx ts-node scripts/ingest-sevilla-density-from-file.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.55.0",
     "@turf/turf": "^7.2.0",
-    "bottleneck": "^2.19.5",
     "maplibre-gl": "^5.6.2",
     "next": "15.4.5",
     "react": "19.1.0",

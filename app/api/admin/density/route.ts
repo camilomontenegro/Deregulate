@@ -115,18 +115,7 @@ export async function POST(request: NextRequest) {
       loadDurationMs: loadDuration 
     });
 
-    async function upsertRow({
-      rc14,
-      apartments,
-      lon,
-      lat,
-      address,
-      currentUse,
-      conditionOfConstruction,
-      beginningYear,
-      numberOfDwellings,
-      buildingAreaM2,
-    }: {
+    interface BuildingData {
       rc14: string;
       apartments: number;
       lon: number;
@@ -137,52 +126,63 @@ export async function POST(request: NextRequest) {
       beginningYear?: number;
       numberOfDwellings?: number;
       buildingAreaM2?: number;
-    }) {
-      const upsertData = {
-        cadastral_ref_building: rc14,
-        total_apartments: apartments,
-        building_address: address ?? "",
-        latitude: lat,
-        longitude: lon,
+    }
+
+    const BATCH_SIZE = 50;
+    let buildingBatch: BuildingData[] = [];
+
+    async function processBatch(batch: BuildingData[], isLastBatch = false) {
+      if (batch.length === 0) return 0;
+
+      const batchData = batch.map(building => ({
+        cadastral_ref_building: building.rc14,
+        total_apartments: building.apartments,
+        building_address: building.address ?? "",
+        latitude: building.lat,
+        longitude: building.lon,
         municipality: "Sevilla",
         province: "Sevilla",
         last_updated: new Date().toISOString(),
         raw_cadastral_data: null,
-        current_use: currentUse || null,
-        condition_of_construction: conditionOfConstruction || null,
-        beginning_year: beginningYear || null,
-        number_of_dwellings: numberOfDwellings || null,
-        building_area_m2: buildingAreaM2 || null,
-      };
+        current_use: building.currentUse || null,
+        condition_of_construction: building.conditionOfConstruction || null,
+        beginning_year: building.beginningYear || null,
+        number_of_dwellings: building.numberOfDwellings || null,
+        building_area_m2: building.buildingAreaM2 || null,
+      }));
 
-      logger.info('Attempting database upsert', { 
+      logger.info('Processing batch upsert', { 
         ...logContext, 
-        buildingId: rc14,
-        dataKeys: Object.keys(upsertData),
-        latitude: lat,
-        longitude: lon
+        batchSize: batch.length,
+        isLastBatch,
+        buildingIds: batch.slice(0, 3).map(b => b.rc14)
       });
 
-      const { data, error } = await supabase.from("building_density").upsert(
-        upsertData,
-        { onConflict: "cadastral_ref_building" }
-      );
+      const { data, error } = await supabase
+        .from("building_density")
+        .upsert(batchData, { 
+          onConflict: "cadastral_ref_building",
+          ignoreDuplicates: false
+        });
       
       if (error) {
-        logger.error('Database upsert failed', error, { 
+        logger.error('Batch upsert failed', error, { 
           ...logContext, 
-          buildingId: rc14,
+          batchSize: batch.length,
           errorCode: error.code,
-          errorDetails: error.details 
+          errorDetails: error.details,
+          buildingIds: batch.map(b => b.rc14)
         });
-        throw new Error(`Database upsert failed for ${rc14}: ${error.message}`);
+        throw new Error(`Batch upsert failed: ${error.message}`);
       }
 
-      logger.info('Database upsert successful', { 
+      logger.info('Batch upsert successful', { 
         ...logContext, 
-        buildingId: rc14,
-        resultData: data 
+        batchSize: batch.length,
+        isLastBatch
       });
+
+      return batch.length;
     }
 
     // Check if GeoJSON file exists
@@ -274,9 +274,42 @@ export async function POST(request: NextRequest) {
       });
 
       // Helper function to terminate processing when limit is reached
-      const initiateTermination = () => {
+      const initiateTermination = async () => {
         if (limitReached) return;
         limitReached = true;
+        
+        // Process any remaining buildings in the current batch before terminating
+        if (buildingBatch.length > 0) {
+          try {
+            // Only process buildings that won't exceed the limit
+            const remainingSlots = maxBuildings - processed;
+            const finalBatch = buildingBatch.slice(0, remainingSlots);
+            
+            if (finalBatch.length > 0) {
+              const batchProcessed = await processBatch(finalBatch, true);
+              
+              finalBatch.forEach(building => {
+                existingBuildingIds.add(building.rc14);
+                processedBuildings.add(building.rc14);
+              });
+              
+              processed += batchProcessed;
+            }
+            
+            buildingBatch = [];
+            
+          } catch (dbError) {
+            const remainingSlots = maxBuildings - processed;
+            const finalBatchSize = Math.min(buildingBatch.length, remainingSlots);
+            errorCount += finalBatchSize;
+            logger.error('Final batch processing failed during termination', dbError as Error, { 
+              ...logContext, 
+              batchSize: finalBatchSize,
+              processed,
+              errorCount 
+            });
+          }
+        }
         
         const duration = Date.now() - startTime;
         logger.info('Processing limit reached', { 
@@ -324,12 +357,36 @@ export async function POST(request: NextRequest) {
       });
 
       // Helper function to check if processing is complete
-      const checkProcessingComplete = () => {
+      const checkProcessingComplete = async () => {
         // Processing is complete when:
         // 1. Stream has ended AND
         // 2. Processing queue is empty AND  
         // 3. Not currently processing any item
         if (streamEnded && processingQueue.length === 0 && !isProcessing && !limitReached) {
+          // Process any remaining buildings in the final batch
+          if (buildingBatch.length > 0) {
+            try {
+              const batchProcessed = await processBatch(buildingBatch, true);
+              
+              buildingBatch.forEach(building => {
+                existingBuildingIds.add(building.rc14);
+                processedBuildings.add(building.rc14);
+              });
+              
+              processed += batchProcessed;
+              buildingBatch = [];
+              
+            } catch (dbError) {
+              errorCount += buildingBatch.length;
+              logger.error('Final batch processing failed', dbError as Error, { 
+                ...logContext, 
+                batchSize: buildingBatch.length,
+                processed,
+                errorCount 
+              });
+            }
+          }
+
           const duration = Date.now() - startTime;
           logger.info('Processing completed successfully', { 
             ...logContext, 
@@ -468,68 +525,78 @@ export async function POST(request: NextRequest) {
           const centroid = turf.centroid({ type: "Feature", properties: {}, geometry: geom as any });
           const [lon, lat] = centroid.geometry.coordinates as [number, number];
 
-          // 4) Upsert synchronously with error handling
-          try {
-            await upsertRow({
-              rc14,
-              apartments: a,
-              lon,
-              lat,
-              address: f.properties?.informationSystem || undefined,
-              currentUse,
-              conditionOfConstruction,
-              beginningYear,
-              numberOfDwellings,
-              buildingAreaM2,
-            });
-            
-            // Add to in-memory duplicate set only on successful upsert
-            existingBuildingIds.add(rc14);
-            processedBuildings.add(rc14);
-            
-            processed++;
-            
-          } catch (dbError) {
-            errorCount++;
-            logger.error('Database upsert failed', dbError as Error, { 
-              ...logContext, 
-              buildingId: rc14,
-              processed,
-              errorCount 
-            });
-            
-            // Continue processing other buildings instead of failing entire batch
-            // Don't add to existingBuildingIds since upsert failed
-          }
-          
-          if (processed % 50 === 0) {
-            logger.info('Processing progress', { 
-              ...logContext, 
-              processed, 
-              skippedDuplicates 
-            });
-            
-            // Log sample of filter data for first batch
-            if (processed === 50) {
-              logger.info('Sample filter data', { 
-                ...logContext, 
-                sampleData: {
-                  currentUse,
-                  conditionOfConstruction,
-                  beginningYear,
-                  numberOfDwellings,
-                  buildingAreaM2,
-                  totalApartments: a
-                }
-              });
-            }
-          }
-
-          // Check if we've hit the limit
+          // 4) Check if we've hit the limit BEFORE processing
           if (processed >= maxBuildings) {
             initiateTermination();
             return;
           }
+
+          // Add to batch for processing
+          buildingBatch.push({
+            rc14,
+            apartments: a,
+            lon,
+            lat,
+            address: f.properties?.informationSystem || undefined,
+            currentUse,
+            conditionOfConstruction,
+            beginningYear,
+            numberOfDwellings,
+            buildingAreaM2,
+          });
+
+          // Process batch when it reaches the target size
+          if (buildingBatch.length >= BATCH_SIZE) {
+            try {
+              const batchProcessed = await processBatch(buildingBatch);
+              
+              // Add all successfully processed buildings to tracking sets
+              buildingBatch.forEach(building => {
+                existingBuildingIds.add(building.rc14);
+                processedBuildings.add(building.rc14);
+              });
+              
+              processed += batchProcessed;
+              buildingBatch = []; // Clear the batch
+              
+              // Log progress after successful batch
+              if (processed % 50 === 0) {
+                logger.info('Processing progress', { 
+                  ...logContext, 
+                  processed, 
+                  skippedDuplicates
+                });
+              }
+              
+            } catch (dbError) {
+              errorCount += buildingBatch.length;
+              logger.error('Batch processing failed', dbError as Error, { 
+                ...logContext, 
+                batchSize: buildingBatch.length,
+                processed,
+                errorCount 
+              });
+              
+              buildingBatch = []; // Clear failed batch
+            }
+          }
+          
+          // Log sample of filter data for early items only (not every item)
+          if (processed === 50 && buildingBatch.length === 1) {
+            logger.info('Sample filter data', { 
+              ...logContext, 
+              sampleData: {
+                currentUse,
+                conditionOfConstruction,
+                beginningYear,
+                numberOfDwellings,
+                buildingAreaM2,
+                totalApartments: a
+              }
+            });
+          }
+
+          // Limit check is now done at the beginning of the function
 
         } catch (e) {
           logger.warn('Skipped feature due to error', { 

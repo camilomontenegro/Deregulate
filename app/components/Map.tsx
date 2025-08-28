@@ -525,11 +525,63 @@ const Map = () => {
           process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
         );
         
-        const { data, error } = await supabase
+        console.log('Loading building density data...');
+        
+        // First, get the total count
+        const { count: totalCount, error: countError } = await supabase
           .from("building_density")
-          .select("latitude, longitude, total_apartments")
-          .eq("municipality", "Sevilla")
-          .limit(100000);
+          .select("*", { count: 'exact', head: true })
+          .eq("municipality", "Sevilla");
+          
+        console.log(`Total building density records in DB: ${totalCount}`);
+        
+        if (countError) {
+          console.error('Count query error:', countError);
+          throw countError;
+        }
+        
+        // Then fetch all records in chunks if needed
+        const CHUNK_SIZE = 1000;
+        let allData: any[] = [];
+        let currentChunk = 0;
+        
+        while (allData.length < (totalCount || 0)) {
+          const start = currentChunk * CHUNK_SIZE;
+          const end = start + CHUNK_SIZE - 1;
+          
+          console.log(`Fetching chunk ${currentChunk + 1}: records ${start}-${end}`);
+          
+          const { data: chunkData, error: chunkError } = await supabase
+            .from("building_density")
+            .select("latitude, longitude, total_apartments")
+            .eq("municipality", "Sevilla")
+            .range(start, end);
+            
+          if (chunkError) {
+            console.error(`Chunk ${currentChunk} error:`, chunkError);
+            throw chunkError;
+          }
+          
+          if (!chunkData || chunkData.length === 0) {
+            console.log(`No more data at chunk ${currentChunk}, breaking`);
+            break;
+          }
+          
+          allData = [...allData, ...chunkData];
+          console.log(`Loaded chunk ${currentChunk + 1}: ${chunkData.length} records, total so far: ${allData.length}`);
+          
+          currentChunk++;
+          
+          // Safety break to prevent infinite loop
+          if (currentChunk > 10) {
+            console.warn('Safety break: more than 10 chunks, stopping');
+            break;
+          }
+        }
+        
+        console.log(`Final building density result: ${allData.length} records loaded out of ${totalCount} total`);
+        const data = allData;
+        const error = null;
           
         if (error) throw error;
         setBuildingDensityData(data || []);
