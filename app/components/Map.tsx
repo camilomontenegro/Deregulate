@@ -479,10 +479,21 @@ const Map = () => {
             visibility: buildingDensityEnabled ? 'visible' : 'none'
           },
           paint: {
-            'heatmap-weight': ['interpolate', ['linear'], ['get', 'apts'], 0, 0, 60, 1],
-            'heatmap-intensity': 1.0,
-            'heatmap-radius': 24,
-            'heatmap-opacity': 0.7,
+            // Scale weight for grid-aggregated data (much higher values than individual buildings)
+            'heatmap-weight': [
+              'interpolate', 
+              ['linear'], 
+              ['get', 'apts'], 
+              0, 0,       // No apartments = no weight
+              1, 0.1,     // Single apartment = minimal weight  
+              50, 0.5,    // 50 apartments = medium weight
+              200, 0.8,   // 200 apartments = high weight
+              500, 1.0,   // 500+ apartments = maximum weight
+              1000, 1.0   // Cap at 1.0 for very dense cells
+            ],
+            'heatmap-intensity': 1.2,  // Increased for grid data visibility
+            'heatmap-radius': 50,      // Larger radius for grid cells  
+            'heatmap-opacity': 0.8,
             'heatmap-color': [
               'interpolate',
               ['linear'],
@@ -518,75 +529,44 @@ const Map = () => {
     setBuildingDensityEnabled(enabled);
     
     if (enabled && buildingDensityData.length === 0) {
-      // Load building density data from Supabase
+      // Load city-wide density grid from API
       try {
-        const supabase = createClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-        );
+        console.log('🏙️ Loading city-wide building density grid...');
         
-        console.log('Loading building density data...');
+        const startTime = Date.now();
+        const response = await fetch('/api/density-grid?city=sevilla&gridSize=40');
         
-        // First, get the total count
-        const { count: totalCount, error: countError } = await supabase
-          .from("building_density")
-          .select("*", { count: 'exact', head: true })
-          .eq("municipality", "Sevilla");
-          
-        console.log(`Total building density records in DB: ${totalCount}`);
-        
-        if (countError) {
-          console.error('Count query error:', countError);
-          throw countError;
+        if (!response.ok) {
+          throw new Error(`Density grid API failed: ${response.status}`);
         }
         
-        // Then fetch all records in chunks if needed
-        const CHUNK_SIZE = 1000;
-        let allData: any[] = [];
-        let currentChunk = 0;
+        const result = await response.json();
         
-        while (allData.length < (totalCount || 0)) {
-          const start = currentChunk * CHUNK_SIZE;
-          const end = start + CHUNK_SIZE - 1;
-          
-          console.log(`Fetching chunk ${currentChunk + 1}: records ${start}-${end}`);
-          
-          const { data: chunkData, error: chunkError } = await supabase
-            .from("building_density")
-            .select("latitude, longitude, total_apartments")
-            .eq("municipality", "Sevilla")
-            .range(start, end);
-            
-          if (chunkError) {
-            console.error(`Chunk ${currentChunk} error:`, chunkError);
-            throw chunkError;
-          }
-          
-          if (!chunkData || chunkData.length === 0) {
-            console.log(`No more data at chunk ${currentChunk}, breaking`);
-            break;
-          }
-          
-          allData = [...allData, ...chunkData];
-          console.log(`Loaded chunk ${currentChunk + 1}: ${chunkData.length} records, total so far: ${allData.length}`);
-          
-          currentChunk++;
-          
-          // Safety break to prevent infinite loop
-          if (currentChunk > 10) {
-            console.warn('Safety break: more than 10 chunks, stopping');
-            break;
-          }
+        if (!result.success) {
+          throw new Error(result.error || 'Density grid API returned error');
         }
         
-        console.log(`Final building density result: ${allData.length} records loaded out of ${totalCount} total`);
-        const data = allData;
-        const error = null;
-          
-        if (error) throw error;
-        setBuildingDensityData(data || []);
+        const loadTime = Date.now() - startTime;
+        
+        console.log(`✅ City-wide grid loaded in ${loadTime}ms`);
+        console.log(`📊 ${result.metadata.totalBuildings} buildings → ${result.metadata.gridCells} grid cells`);
+        console.log(`🔥 Max density: ${result.metadata.maxDensity} apartments per cell`);
+        
+        // Convert grid cells to point format for heatmap rendering
+        const gridAsPoints = result.grid.map((cell: any) => ({
+          latitude: cell.centerLat,
+          longitude: cell.centerLng,
+          total_apartments: cell.densityScore, // Use density score for heatmap weight
+          building_count: cell.buildingCount,
+          avg_year: cell.avgConstructionYear
+        }));
+        
+        console.log(`🗺️ Grid cells sample:`, gridAsPoints.slice(0, 3));
+        
+        setBuildingDensityData(gridAsPoints);
+        
       } catch (error) {
-        console.error('Error loading building density data:', error);
+        console.error('💥 Error loading city-wide density grid:', error);
       }
     }
   };
@@ -666,7 +646,7 @@ const Map = () => {
         propertyCount={properties.length}
         buildingDensityEnabled={buildingDensityEnabled}
         onBuildingDensityToggle={handleBuildingDensityToggle}
-        buildingDensityCount={buildingDensityData.length}
+        buildingDensityCount={buildingDensityData.length > 0 ? `${buildingDensityData.length} grid cells` : 0}
         heatmapSettings={heatmapSettings}
         onHeatmapSettingsChange={setHeatmapSettings}
       />

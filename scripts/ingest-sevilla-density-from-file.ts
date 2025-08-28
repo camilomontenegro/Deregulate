@@ -59,8 +59,10 @@ async function upsertRow({
 async function run() {
   const file = path.resolve("data/sevilla_buildings.geojson");
   
-  console.log(`Starting ingestion from: ${file}`);
-  console.log(`Max buildings to process: ${MAX_BUILDINGS}`);
+  console.log(`🎲 Starting GEOGRAPHIC STRATIFIED SAMPLING ingestion from: ${file}`);
+  console.log(`📊 Target sample size: ${MAX_BUILDINGS} buildings`);
+  console.log(`🗺️  Method: ${GRID_SIZE}x${GRID_SIZE} grid zones, ~${BUILDINGS_PER_ZONE} buildings per zone`);
+  console.log(`📍 Ensures even spatial distribution across entire city!\n`);
   
   // Try a simpler approach - load a small chunk first to test
   console.log('Reading file...');
@@ -71,7 +73,21 @@ async function run() {
   const features = streamArray();
 
   let processed = 0;
+  let totalSeen = 0;
   const seen = new Set<string>();
+  
+  // Geographic stratified sampling: divide city into grid zones
+  const GRID_SIZE = 10; // 10x10 grid = 100 zones
+  const BUILDINGS_PER_ZONE = Math.ceil(MAX_BUILDINGS / (GRID_SIZE * GRID_SIZE));
+  const zoneReservoirs = new Map<string, any[]>(); // zone -> buildings in that zone
+  
+  // Sevilla bounds for zone calculation
+  const BOUNDS = {
+    north: 37.45,
+    south: 37.32,
+    east: -5.85,
+    west: -6.05
+  };
 
   // Add error handling
   source.on('error', (err: any) => {
@@ -96,8 +112,6 @@ async function run() {
   });
 
   features.on("data", async ({ value }: { value: any }) => {
-    if (processed >= MAX_BUILDINGS) return;
-
     const f = value as {
       type: "Feature";
       properties: any;
@@ -142,21 +156,71 @@ async function run() {
     const centroid = turf.centroid({ type: "Feature", properties: {}, geometry: geom as any });
     const [lon, lat] = centroid.geometry.coordinates as [number, number];
 
-    // 4) Upsert
-    await upsertRow({
+    // 4) Geographic stratified sampling: assign building to zone
+    const buildingData = {
       rc14,
       apartments: a,
       lon,
       lat,
       address: f.properties?.informationSystem || undefined,
-    });
+    };
 
-    processed++;
-    if (processed % 100 === 0) console.log(`Upserted ${processed} buildings…`);
+    totalSeen++;
+
+    // Calculate which zone this building belongs to
+    const latStep = (BOUNDS.north - BOUNDS.south) / GRID_SIZE;
+    const lngStep = (BOUNDS.east - BOUNDS.west) / GRID_SIZE;
+    
+    const zoneX = Math.min(Math.floor((lon - BOUNDS.west) / lngStep), GRID_SIZE - 1);
+    const zoneY = Math.min(Math.floor((lat - BOUNDS.south) / latStep), GRID_SIZE - 1);
+    const zoneKey = `${zoneX},${zoneY}`;
+    
+    // Get or create reservoir for this zone
+    if (!zoneReservoirs.has(zoneKey)) {
+      zoneReservoirs.set(zoneKey, []);
+    }
+    const zoneReservoir = zoneReservoirs.get(zoneKey)!;
+    
+    // Reservoir sampling within this zone
+    if (zoneReservoir.length < BUILDINGS_PER_ZONE) {
+      zoneReservoir.push(buildingData);
+    } else {
+      // Replace random building in this zone
+      const randomIndex = Math.floor(Math.random() * zoneReservoir.length);
+      zoneReservoir[randomIndex] = buildingData;
+    }
+
+    if (totalSeen % 1000 === 0) {
+      const totalSampled = Array.from(zoneReservoirs.values()).reduce((sum, zone) => sum + zone.length, 0);
+      console.log(`Processed ${totalSeen} buildings, sampled: ${totalSampled} across ${zoneReservoirs.size} zones`);
+    }
   });
 
-  features.on("end", () => {
-    console.log(`DONE. Inserted/updated ~${processed}. Unique RCs: ${seen.size}`);
+  features.on("end", async () => {
+    console.log(`\n📊 Geographic sampling complete! Processed ${totalSeen} total buildings.`);
+    console.log(`🗺️  Found buildings in ${zoneReservoirs.size} different zones.`);
+    
+    // Flatten all zone reservoirs into final sample
+    const allSampled: any[] = [];
+    for (const [zoneKey, zoneBuildings] of zoneReservoirs.entries()) {
+      console.log(`Zone ${zoneKey}: ${zoneBuildings.length} buildings`);
+      allSampled.push(...zoneBuildings);
+    }
+    
+    console.log(`🎲 Total selected: ${allSampled.length} geographically distributed buildings.\n`);
+    
+    // Now process the geographically sampled buildings
+    for (const building of allSampled) {
+      await upsertRow(building);
+      processed++;
+      
+      if (processed % 100 === 0) {
+        console.log(`Upserted ${processed}/${allSampled.length} sampled buildings…`);
+      }
+    }
+    
+    console.log(`\n✅ DONE! Inserted/updated ${processed} geographically distributed buildings.`);
+    console.log(`📍 Distribution: Up to ${BUILDINGS_PER_ZONE} buildings per zone across ${GRID_SIZE}x${GRID_SIZE} grid.`);
   });
 
   // Pipeline setup
