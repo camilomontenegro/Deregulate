@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+// Simple in-memory cache for grid responses
+// Production: replace with Redis or similar
+const gridCache = new Map<string, {
+  data: any;
+  timestamp: number;
+  expiresAt: number;
+}>();
+
+const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes cache
+
 interface GridCell {
   x: number;
   y: number;
@@ -49,6 +59,21 @@ export async function GET(request: NextRequest) {
   // Parse parameters
   const city = searchParams.get('city')?.toLowerCase() || 'sevilla';
   const gridSize = parseInt(searchParams.get('gridSize') || '40');
+  
+  // Create cache key
+  const cacheKey = `grid_${city}_${gridSize}`;
+  const now = Date.now();
+  
+  // Check cache first
+  const cached = gridCache.get(cacheKey);
+  if (cached && now < cached.expiresAt) {
+    console.log(`🚀 Cache HIT for ${city} (${gridSize}x${gridSize}) - saved ${now - cached.timestamp}ms`);
+    return NextResponse.json({
+      ...cached.data,
+      cached: true,
+      cacheAge: now - cached.timestamp
+    });
+  }
   
   // Validate parameters
   if (!CITY_BOUNDS[city]) {
@@ -212,7 +237,7 @@ export async function GET(request: NextRequest) {
     console.log(`📈 Stats: ${totalBuildings} buildings → ${gridCells.length} cells in ${processingTime}ms`);
     console.log(`🔥 Hottest cell: ${maxDensity} apartments`);
 
-    return NextResponse.json({
+    const responseData = {
       success: true,
       city,
       grid: gridCells,
@@ -224,7 +249,27 @@ export async function GET(request: NextRequest) {
         processingTimeMs: processingTime,
         bounds
       }
+    };
+
+    // Cache the response
+    gridCache.set(cacheKey, {
+      data: responseData,
+      timestamp: now,
+      expiresAt: now + CACHE_DURATION_MS
     });
+    
+    // Clean expired cache entries periodically
+    if (gridCache.size > 20) { // Arbitrary cleanup threshold
+      Array.from(gridCache.entries()).forEach(([key, value]) => {
+        if (now >= value.expiresAt) {
+          gridCache.delete(key);
+        }
+      });
+    }
+    
+    console.log(`💾 Response cached for ${CACHE_DURATION_MS / 1000}s (cache size: ${gridCache.size})`);
+
+    return NextResponse.json(responseData);
 
   } catch (error) {
     console.error('💥 Density grid generation failed:', error);

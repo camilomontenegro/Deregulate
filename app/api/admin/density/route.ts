@@ -128,7 +128,8 @@ export async function POST(request: NextRequest) {
       buildingAreaM2?: number;
     }
 
-    const BATCH_SIZE = 50;
+    // Dynamic batch size - don't batch more buildings than requested
+    const BATCH_SIZE = Math.min(maxBuildings, 50);
     let buildingBatch: BuildingData[] = [];
 
     async function processBatch(batch: BuildingData[], isLastBatch = false) {
@@ -158,12 +159,21 @@ export async function POST(request: NextRequest) {
         buildingIds: batch.slice(0, 3).map(b => b.rc14)
       });
 
+      // DEBUG: Log the exact data being sent
+      logger.info('Attempting upsert with data', {
+        ...logContext,
+        batchSize: batchData.length,
+        sampleRecord: batchData[0],
+        upsertOptions: { onConflict: "cadastral_ref_building", ignoreDuplicates: false }
+      });
+
       const { data, error } = await supabase
         .from("building_density")
         .upsert(batchData, { 
           onConflict: "cadastral_ref_building",
           ignoreDuplicates: false
-        });
+        })
+        .select(); // CRITICAL: Add .select() to return inserted data
       
       if (error) {
         logger.error('Batch upsert failed', error, { 
@@ -176,11 +186,26 @@ export async function POST(request: NextRequest) {
         throw new Error(`Batch upsert failed: ${error.message}`);
       }
 
-      logger.info('Batch upsert successful', { 
+      // CRITICAL: Check if data was actually returned (indicates successful insert/update)
+      const recordsAffected = data ? data.length : 0;
+      
+      logger.info('Batch upsert completed', { 
         ...logContext, 
         batchSize: batch.length,
-        isLastBatch
+        recordsAffected,
+        isLastBatch,
+        sampleData: data ? data.slice(0, 2) : null
       });
+      
+      // DIAGNOSTIC: If no records affected, this indicates RLS/permission issue
+      if (recordsAffected === 0) {
+        logger.error('CRITICAL: Upsert succeeded but no records affected - likely RLS policy issue', null, {
+          ...logContext,
+          batchSize: batch.length,
+          sampleBuilding: batchData[0],
+          suggestion: 'Check Supabase RLS policies on building_density table'
+        });
+      }
 
       return batch.length;
     }
@@ -321,6 +346,50 @@ export async function POST(request: NextRequest) {
           uniqueRCs: seen.size, 
           durationMs: duration 
         });
+        
+        // VERIFICATION: Check if our specific buildings were actually inserted
+        try {
+          // Get a few sample RC14s from the processed buildings
+          const sampleIds = Array.from(processedBuildings).slice(0, 3);
+          const { data: verificationData, error: verificationError } = await supabase
+            .from('building_density')
+            .select('cadastral_ref_building')
+            .in('cadastral_ref_building', sampleIds);
+          
+          if (verificationError) {
+            throw verificationError;
+          }
+          
+          const foundRecords = verificationData?.length || 0;
+          const sampleSize = Math.min(sampleIds.length, 3);
+          
+          logger.info('Database verification complete', {
+            ...logContext,
+            processedBuildings: processed,
+            sampleIds,
+            foundRecords,
+            sampleSize,
+            verificationSuccess: foundRecords === sampleSize
+          });
+          
+          if (foundRecords !== sampleSize) {
+            logger.error('CRITICAL: Sample verification failed - some records not found', null, {
+              ...logContext,
+              expectedSamples: sampleSize,
+              foundSamples: foundRecords,
+              missingSamples: sampleSize - foundRecords,
+              sampleIds
+            });
+          } else {
+            logger.info('SUCCESS: All sample records verified in database', {
+              ...logContext,
+              processedBuildings: processed,
+              verifiedSamples: foundRecords
+            });
+          }
+        } catch (verificationError) {
+          logger.error('Database verification failed', verificationError as Error, logContext);
+        }
         
         // Clear the processing queue to prevent further processing
         processingQueue = [];
@@ -469,6 +538,12 @@ export async function POST(request: NextRequest) {
             return;
           }
           
+          // CRITICAL FIX: Only proceed if we haven't reached the limit of NEW buildings
+          if (processed >= maxBuildings) {
+            initiateTermination();
+            return;
+          }
+          
           
           seen.add(rc14);
 
@@ -525,7 +600,7 @@ export async function POST(request: NextRequest) {
           const centroid = turf.centroid({ type: "Feature", properties: {}, geometry: geom as any });
           const [lon, lat] = centroid.geometry.coordinates as [number, number];
 
-          // 4) Check if we've hit the limit BEFORE processing
+          // 4) Limit check moved earlier - this is now redundant but keeping for safety
           if (processed >= maxBuildings) {
             initiateTermination();
             return;
@@ -545,19 +620,32 @@ export async function POST(request: NextRequest) {
             buildingAreaM2,
           });
 
-          // Process batch when it reaches the target size
-          if (buildingBatch.length >= BATCH_SIZE) {
+          // Process batch when it reaches target size OR we've hit the limit
+          if (buildingBatch.length >= BATCH_SIZE || processed + buildingBatch.length >= maxBuildings) {
             try {
-              const batchProcessed = await processBatch(buildingBatch);
+              // Only process up to the requested limit
+              const remainingSlots = maxBuildings - processed;
+              const batchToProcess = buildingBatch.slice(0, remainingSlots);
               
-              // Add all successfully processed buildings to tracking sets
-              buildingBatch.forEach(building => {
-                existingBuildingIds.add(building.rc14);
-                processedBuildings.add(building.rc14);
-              });
+              if (batchToProcess.length > 0) {
+                const batchProcessed = await processBatch(batchToProcess);
+                
+                // Add all successfully processed buildings to tracking sets
+                batchToProcess.forEach(building => {
+                  existingBuildingIds.add(building.rc14);
+                  processedBuildings.add(building.rc14);
+                });
+                
+                processed += batchProcessed;
+              }
               
-              processed += batchProcessed;
               buildingBatch = []; // Clear the batch
+              
+              // Check if we've reached the limit
+              if (processed >= maxBuildings) {
+                initiateTermination();
+                return;
+              }
               
               // Log progress after successful batch
               if (processed % 50 === 0) {

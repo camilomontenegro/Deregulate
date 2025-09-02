@@ -272,5 +272,44 @@ Total unique RCs encountered: 1164
    - Database schema not documented in repository
    - No rollback mechanism for failed ingestions
 
+#### 🚧 CURRENT STATUS: Phase 1 Fixes Applied (2025-09-02)
+**Major Progress Made**: Fixed critical persistence bug that was preventing all ingestion
+
+**✅ Successfully Fixed**:
+1. **Critical Persistence Bug**: Added `.select()` to Supabase upsert chain - records now actually insert
+2. **RLS Policy Issue**: Identified and resolved Row Level Security blocking inserts  
+3. **Enhanced Diagnostics**: Added comprehensive logging with verification queries
+4. **Response Caching**: 5-minute cache on `/api/density-grid` for performance
+5. **Geographic Sampling**: Created HISDAC-ES inspired grid sampler (`hisdac-geographic-sampler.ts`)
+
+**⚠️ REMAINING ISSUES (Partially Resolved)**:
+
+1. **Batch Size Logic Bug**: Fixed but still has edge cases
+   - **Problem**: When requesting small amounts (5-10 buildings) after database has many rows, system processes existing records instead of finding new ones
+   - **Root Cause**: Fixed 50-building batch size conflicted with smaller requests + duplicate detection logic
+   - **Partial Fix Applied**: Dynamic batch sizing + early termination logic
+   - **Status**: Improved but still inconsistent behavior
+
+2. **Map Visualization Gap**: Database vs Display Mismatch  
+   - **Problem**: 10k records in database but only small subset visible on map
+   - **Likely Cause**: Coordinate filtering, bounds checking, or visualization layer issues
+   - **Investigation Needed**: Check `/api/density-grid` coordinate filtering and Map.tsx rendering
+   - **Status**: Not investigated yet
+
+**📊 System Performance** (Current):
+- ✅ Database operations: Working with proper logging
+- ✅ Individual record insertion: Confirmed working  
+- ⚠️ Small batch requests: Inconsistent when table has existing data
+- ⚠️ Map visualization: Major gap between stored and displayed data
+
+**🔧 Recent Code Changes**:
+- `app/api/admin/density/route.ts`: Enhanced logging, fixed upsert chain, improved batch logic
+- `app/api/density-grid/route.ts`: Added 5-minute response caching
+- `scripts/hisdac-geographic-sampler.ts`: New geographic sampling approach (unused)
+- `scripts/test-supabase-permissions.ts`: Diagnostic tool for permission testing
+
 ## Next Priority
-**Grid-based spatial tiling system** implementation for efficient data chunking, followed by implementing the **beginning year filter** and enhanced UI controls for production deployment.
+1. **Investigate map visualization gap** - why 10k database records show as few map points
+2. **Fix small batch ingestion** - resolve edge cases in duplicate detection + batch processing  
+3. **Grid-based spatial tiling system** implementation for efficient data chunking
+4. **Implement beginning year filter** and enhanced UI controls for production deployment
